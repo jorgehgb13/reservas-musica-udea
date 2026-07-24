@@ -1,84 +1,58 @@
-// PÁGINA DE PRUEBA — Paso 1 de la reconstrucción.
-// Su único objetivo es demostrar que el sitio web puede leer datos reales
-// desde Supabase. No tiene formularios ni lógica de reservas todavía;
-// eso viene en el siguiente paso, una vez confirmemos que esta conexión
-// funciona sin errores.
-
-import { supabase } from '../lib/supabaseClient';
-
-// Fuerza a Next.js a consultar datos frescos en cada visita (nada de caché
-// mientras estamos probando), para evitar confusiones de "no veo el cambio".
 export const dynamic = 'force-dynamic';
 
-export default async function Home() {
-  // Manejo de errores explícito: si algo falla (credenciales mal puestas,
-  // tabla no existe, sin internet hacia Supabase), lo mostramos con
-  // claridad en vez de que la página se rompa en blanco.
-  let rooms = [];
-  let errorMessage = null;
-
-  try {
-    const { data, error } = await supabase
-      .from('rooms')
-      .select('id, code, name, type')
-      .order('code', { ascending: true });
-
-    if (error) {
-      errorMessage = `Error de Supabase: ${error.message}`;
-    } else {
-      rooms = data || [];
-    }
-  } catch (err) {
-    errorMessage = `Error de conexión: ${err.message}`;
-  }
-
+export default function Home() {
   return (
-    <main style={{ maxWidth: 640, margin: '0 auto' }}>
-      <h1 style={{ fontSize: 22 }}>Prueba de conexión — Depto. de Música UdeA</h1>
-      <p style={{ color: '#5B6B60', fontSize: 14 }}>
-        Esta página confirma que el sitio web puede leer la tabla <code>rooms</code> directamente
-        desde la base de datos real en Supabase.
+    <main style={{ maxWidth: 480, margin: '60px auto 0', textAlign: 'center', padding: '0 16px' }}>
+      <div
+        style={{
+          width: 44, height: 44, borderRadius: '50%', background: '#0B6E4F',
+          color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontFamily: 'Georgia, serif', fontWeight: 600, fontSize: 14, margin: '0 auto 16px',
+        }}
+      >
+        UdeA
+      </div>
+
+      <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 26, margin: '0 0 6px' }}>
+        Reserva tu espacio de práctica
+      </h1>
+      <p style={{ color: '#5B6B60', fontSize: 14, marginBottom: 34 }}>
+        Cubículos, aulas y auditorio del Departamento de Música
       </p>
 
-      {errorMessage && (
-        <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 14, borderRadius: 8, marginTop: 16 }}>
-          <strong>Algo falló:</strong> {errorMessage}
-        </div>
-      )}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 300, margin: '0 auto' }}>
+        <button
+          disabled
+          style={{
+            padding: 14, fontSize: 15, borderRadius: 8, border: '1px solid #0B6E4F',
+            background: '#0B6E4F', color: '#fff', opacity: 0.6, cursor: 'not-allowed',
+          }}
+        >
+          Solicitar una reserva
+        </button>
+        <button
+          disabled
+          style={{
+            padding: 10, fontSize: 13, borderRadius: 8, border: '1px solid #DBDCCF',
+            background: '#fff', color: '#16241C', opacity: 0.6, cursor: 'not-allowed',
+          }}
+        >
+          Cancelar mi reserva
+        </button>
+        <button
+          disabled
+          style={{
+            padding: 10, fontSize: 13, borderRadius: 8, border: '1px solid transparent',
+            background: 'transparent', color: '#5B6B60', opacity: 0.6, cursor: 'not-allowed',
+          }}
+        >
+          Soy administrador
+        </button>
+      </div>
 
-      {!errorMessage && rooms.length === 0 && (
-        <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 14, borderRadius: 8, marginTop: 16 }}>
-          La conexión funcionó, pero la tabla <code>rooms</code> está vacía. Eso es normal si aún no
-          has cargado las aulas — este mensaje confirma que la conexión en sí está bien.
-        </div>
-      )}
-
-      {!errorMessage && rooms.length > 0 && (
-        <div style={{ background: '#E4F0EA', border: '1px solid #bfe0cf', color: '#084F39', padding: 14, borderRadius: 8, marginTop: 16 }}>
-          ✅ Conexión exitosa. Se encontraron {rooms.length} espacio(s) en la base de datos.
-        </div>
-      )}
-
-      {rooms.length > 0 && (
-        <table style={{ width: '100%', marginTop: 20, borderCollapse: 'collapse', fontSize: 14 }}>
-          <thead>
-            <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
-              <th style={{ padding: 8 }}>Código</th>
-              <th style={{ padding: 8 }}>Nombre</th>
-              <th style={{ padding: 8 }}>Tipo</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rooms.map((r) => (
-              <tr key={r.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
-                <td style={{ padding: 8 }}>{r.code}</td>
-                <td style={{ padding: 8 }}>{r.name}</td>
-                <td style={{ padding: 8 }}>{r.type}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+      <p style={{ color: '#5B6B60', fontSize: 12, marginTop: 40 }}>
+        (Los botones aún no funcionan — esto solo confirma que el diseño se ve bien.)
+      </p>
     </main>
   );
 }
