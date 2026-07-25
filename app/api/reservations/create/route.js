@@ -49,8 +49,8 @@ export async function POST(request) {
     if (activeSanctions && activeSanctions.length > 0) {
       const s = activeSanctions[0];
       return NextResponse.json(
-        { ok: false, message: message: `Tu acceso a reservas está { ok: false, message: `Tu acceso a reservas está suspendido hasta el ${new Date(s.until).toLocaleString('es-CO', { timeZone: 'America/Bogota' })}.` },
-        
+        { ok: false, message: `Tu acceso a reservas está suspendido hasta el ${new Date(s.until).toLocaleString('es-CO', { timeZone: 'America/Bogota' })}.` },
+        { status: 403 }
       );
     }
 
@@ -69,7 +69,7 @@ export async function POST(request) {
     const hasActive = (existingActive || []).some((r) => new Date(`${r.date}T${r.end_time}-05:00`) > now);
     if (hasActive) {
       return NextResponse.json(
-        { ok: false, message: 'message: `Ya tienes una reserva activa en ${active.rooms?.name || 'un espacio'} que termina el ${new Date(`${active.date}T${active.end_time}-05:00`).toLocaleString('es-CO', { timeZone: 'America/Bogota' })}. Podrás solicitar una nueva cuando termine.`,
+        { ok: false, message: 'Ya tienes una reserva activa sin terminar. Espera a que termine para solicitar otra.' },
         { status: 403 }
       );
     }
