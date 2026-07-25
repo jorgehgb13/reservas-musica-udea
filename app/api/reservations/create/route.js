@@ -1,7 +1,8 @@
 // Ruta de servidor: crea la reserva real en estado "sin_verificar", con un
 // código de 6 dígitos. Antes de crear, vuelve a revisar sanciones y reserva
-// activa, y revisa conflictos de horario de forma amigable. La base de datos
-// (restricción EXCLUDE) es la garantía final contra dos reservas al mismo tiempo.
+// activa (por si pasó tiempo entre el Paso 1 y este momento), y revisa
+// conflictos de horario de forma amigable. La base de datos (restricción
+// EXCLUDE) es la garantía final contra dos reservas al mismo tiempo.
 
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
@@ -65,7 +66,7 @@ export async function POST(request) {
     }
 
     const now = new Date();
-    const hasActive = (existingActive || []).some((r) => new Date(`${r.date}T${r.end_time}`) > now);
+    const hasActive = (existingActive || []).some((r) => new Date(`${r.date}T${r.end_time}-05:00`) > now);
     if (hasActive) {
       return NextResponse.json(
         { ok: false, message: 'Ya tienes una reserva activa sin terminar. Espera a que termine para solicitar otra.' },
