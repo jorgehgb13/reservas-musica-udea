@@ -75,7 +75,7 @@ export async function POST(request) {
           {
             ok: false,
             reason: 'sanctioned',
-            message: `Tu acceso a reservas está suspendido hasta el ${new Date(s.until).toLocaleString('es-CO')}${s.reason ? ` — Motivo: ${s.reason}` : ''}.`,
+            message: `Tu acceso a reservas está suspendido hasta el ${new Date(s.until).toLocaleString('es-CO', { timeZone: 'America/Bogota' })}${s.reason ? ` — Motivo: ${s.reason}` : ''}.`,
           },
           { status: 403 }
         );
@@ -105,7 +105,7 @@ export async function POST(request) {
           {
             ok: false,
             reason: 'active_reservation',
-            message: `Ya tienes una reserva activa en ${active.rooms?.name || 'un espacio'} que termina el ${new Date(`${active.date}T${active.end_time}-05:00`).toLocaleString('es-CO')}. Podrás solicitar una nueva cuando termine.`,
+            message: `Ya tienes una reserva activa en ${active.rooms?.name || 'un espacio'} que termina el ${new Date(`${active.date}T${active.end_time}-05:00`).toLocaleString('es-CO', { timeZone: 'America/Bogota' })}. Podrás solicitar una nueva cuando termine.`,
           },
           { status: 403 }
         );
