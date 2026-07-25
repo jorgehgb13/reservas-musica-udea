@@ -1,3 +1,7 @@
+// PÁGINA DE INICIO — reemplaza la página de prueba.
+// Por ahora los botones no hacen nada todavía (eso viene en el siguiente
+// paso); esto solo confirma que el diseño se ve correcto en producción.
+
 export const dynamic = 'force-dynamic';
 
 export default function Home() {
@@ -21,15 +25,15 @@ export default function Home() {
       </p>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 300, margin: '0 auto' }}>
-        <button
-          disabled
+        <a
+          href="/reservar"
           style={{
             padding: 14, fontSize: 15, borderRadius: 8, border: '1px solid #0B6E4F',
-            background: '#0B6E4F', color: '#fff', opacity: 0.6, cursor: 'not-allowed',
+            background: '#0B6E4F', color: '#fff', textDecoration: 'none', display: 'block', boxSizing: 'border-box',
           }}
         >
           Solicitar una reserva
-        </button>
+        </a>
         <button
           disabled
           style={{
@@ -39,19 +43,19 @@ export default function Home() {
         >
           Cancelar mi reserva
         </button>
-        <button
-          disabled
+        <a
+          href="/admin/login"
           style={{
             padding: 10, fontSize: 13, borderRadius: 8, border: '1px solid transparent',
-            background: 'transparent', color: '#5B6B60', opacity: 0.6, cursor: 'not-allowed',
+            background: 'transparent', color: '#5B6B60', textDecoration: 'none', display: 'block',
           }}
         >
           Soy administrador
-        </button>
+        </a>
       </div>
 
       <p style={{ color: '#5B6B60', fontSize: 12, marginTop: 40 }}>
-        (Los botones aún no funcionan — esto solo confirma que el diseño se ve bien.)
+        ("Cancelar mi reserva" aún no está activo — llega pronto.)
       </p>
     </main>
   );
