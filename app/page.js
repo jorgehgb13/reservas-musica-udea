@@ -34,15 +34,15 @@ export default function Home() {
         >
           Solicitar una reserva
         </a>
-        <button
-          disabled
+        <a
+          href="/cancelar"
           style={{
             padding: 10, fontSize: 13, borderRadius: 8, border: '1px solid #DBDCCF',
-            background: '#fff', color: '#16241C', opacity: 0.6, cursor: 'not-allowed',
+            background: '#fff', color: '#16241C', textDecoration: 'none', display: 'block', boxSizing: 'border-box',
           }}
         >
           Cancelar mi reserva
-        </button>
+        </a>
         <a
           href="/admin/login"
           style={{
@@ -53,10 +53,6 @@ export default function Home() {
           Soy administrador
         </a>
       </div>
-
-      <p style={{ color: '#5B6B60', fontSize: 12, marginTop: 40 }}>
-        ("Cancelar mi reserva" aún no está activo — llega pronto.)
-      </p>
     </main>
   );
 }
