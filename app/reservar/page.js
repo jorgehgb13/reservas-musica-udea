@@ -242,7 +242,7 @@ export default function Reservar() {
         </p>
 
         <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
-          Este servicio es exclusivo para estudiantes activos de la Universidad de Antioquia.
+          Este servicio es exclusivo para estudiantes y profesores activos de la Universidad de Antioquia.
         </div>
 
         {error && (
