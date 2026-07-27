@@ -183,6 +183,17 @@ export default function Reservar() {
 
     async function loadAvailability() {
       setLoadingAvailability(true);
+      try {
+        await fetch('/api/reservations/expire-no-shows', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId }),
+        });
+      } catch (err) {
+        // si esta llamada falla no pasa nada grave, solo se ve un poco
+        // menos al día — seguimos con la consulta de disponibilidad igual.
+      }
+
       const { data, error: fetchError } = await supabase
         .from('reservations')
         .select('start_time, end_time, status')
