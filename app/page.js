@@ -62,6 +62,12 @@ export default function Home() {
           Soy administrador
         </a>
       </div>
+
+      <footer style={{ marginTop: 60, paddingTop: 20, borderTop: '1px solid #DBDCCF', fontSize: 12.5, color: '#5B6B60', lineHeight: 1.6 }}>
+        Coordinación Académica Departamento de Música
+        <br />
+        Jorge.gomezb@udea.edu.co
+      </footer>
     </main>
   );
 }
