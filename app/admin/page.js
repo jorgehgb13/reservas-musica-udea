@@ -143,7 +143,7 @@ export default function AdminHome() {
   const [session, setSession] = useState(undefined);
   const router = useRouter();
 
-  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos' | 'semana' | 'estadisticas' | 'aprobaciones' | 'manual'
+  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos' | 'semana' | 'estadisticas' | 'aprobaciones' | 'manual' | 'asistencia'
   const [date, setDate] = useState(todayStr());
   const [reservations, setReservations] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -177,6 +177,20 @@ export default function AdminHome() {
   const [blockSubmitting, setBlockSubmitting] = useState(false);
   const [blockError, setBlockError] = useState(null);
   const [blockResults, setBlockResults] = useState(null);
+
+  // ---------- Asistencia por persona ----------
+  const [attFrom, setAttFrom] = useState(addDays(todayStr(), -180));
+  const [attTo, setAttTo] = useState(todayStr());
+  const [attLoading, setAttLoading] = useState(false);
+  const [attError, setAttError] = useState(null);
+  const [attRows, setAttRows] = useState([]);
+  const [attSearch, setAttSearch] = useState('');
+
+  // ---------- Depurar datos antiguos ----------
+  const [purgeConfirming, setPurgeConfirming] = useState(false);
+  const [purgeRunning, setPurgeRunning] = useState(false);
+  const [purgeResult, setPurgeResult] = useState(null);
+  const [purgeError, setPurgeError] = useState(null);
 
   const [rooms, setRooms] = useState([]);
   const [roomsError, setRoomsError] = useState(null);
@@ -405,6 +419,79 @@ export default function AdminHome() {
   useEffect(() => {
     if (session && view === 'estadisticas') loadStats();
   }, [session, view, loadStats]);
+
+  const loadAttendance = useCallback(async () => {
+    setAttLoading(true);
+    setAttError(null);
+
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('reservations')
+      .select('id, date, end_time, status, checked_in_at, cancel_reason, notes, recurring_template_id, user_id, app_users ( name, email )')
+      .gte('date', attFrom)
+      .lte('date', attTo);
+
+    if (error) {
+      console.error('[admin] error cargando asistencia:', error);
+      setAttError(`No se pudo cargar la asistencia: ${error.message}`);
+      setAttRows([]);
+      setAttLoading(false);
+      return;
+    }
+
+    const now = new Date();
+    const byUser = {};
+
+    for (const r of data || []) {
+      // Los bloqueos de espacio (creados desde "Reserva manual") no son
+      // asistencia de una persona real — se excluyen del cálculo.
+      if (r.notes && r.notes.startsWith('Bloqueado por administrador')) continue;
+
+      const endDt = new Date(`${r.date}T${r.end_time}-05:00`);
+      const completed = (r.status === 'confirmada' && endDt < now) || (r.status === 'cancelada' && r.cancel_reason === 'no_asistio');
+      if (!completed) continue;
+
+      const key = r.user_id;
+      if (!byUser[key]) {
+        byUser[key] = {
+          userId: key,
+          name: r.app_users?.name || '—',
+          email: r.app_users?.email || '—',
+          recTotal: 0,
+          recAttended: 0,
+          adhocTotal: 0,
+          adhocAttended: 0,
+        };
+      }
+      const attended = !!r.checked_in_at;
+      if (r.recurring_template_id) {
+        byUser[key].recTotal += 1;
+        if (attended) byUser[key].recAttended += 1;
+      } else {
+        byUser[key].adhocTotal += 1;
+        if (attended) byUser[key].adhocAttended += 1;
+      }
+    }
+
+    const rows = Object.values(byUser).map((u) => {
+      const total = u.recTotal + u.adhocTotal;
+      const attended = u.recAttended + u.adhocAttended;
+      return {
+        ...u,
+        recPct: u.recTotal > 0 ? Math.round((u.recAttended / u.recTotal) * 100) : null,
+        adhocPct: u.adhocTotal > 0 ? Math.round((u.adhocAttended / u.adhocTotal) * 100) : null,
+        totalPct: total > 0 ? Math.round((attended / total) * 100) : null,
+      };
+    });
+    rows.sort((a, b) => a.name.localeCompare(b.name));
+
+    setAttRows(rows);
+    setAttLoading(false);
+  }, [attFrom, attTo]);
+
+  useEffect(() => {
+    if (session && view === 'asistencia') loadAttendance();
+  }, [session, view, loadAttendance]);
 
   const loadSanctions = useCallback(async () => {
     setSanctionsLoading(true);
@@ -995,6 +1082,53 @@ export default function AdminHome() {
     XLSX.writeFile(wb, `estadisticas-${statsFrom}-a-${statsTo}.xlsx`);
   }
 
+  async function handleDownloadAttendance() {
+    const XLSX = await import('xlsx');
+    const rows = [
+      ['Nombre', 'Correo', 'Recurrentes programadas', 'Recurrentes asistidas', '% asistencia recurrentes',
+        'Puntuales programadas', 'Puntuales asistidas', '% asistencia puntuales', '% asistencia total'],
+      ...attRows.map((u) => [
+        u.name, u.email, u.recTotal, u.recAttended, u.recPct === null ? '—' : `${u.recPct}%`,
+        u.adhocTotal, u.adhocAttended, u.adhocPct === null ? '—' : `${u.adhocPct}%`,
+        u.totalPct === null ? '—' : `${u.totalPct}%`,
+      ]),
+    ];
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{ wch: 24 }, { wch: 26 }, { wch: 20 }, { wch: 18 }, { wch: 20 }, { wch: 18 }, { wch: 16 }, { wch: 18 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Asistencia por persona');
+    XLSX.writeFile(wb, `asistencia-${attFrom}-a-${attTo}.xlsx`);
+  }
+
+  async function handlePurgeOldData() {
+    setPurgeRunning(true);
+    setPurgeError(null);
+    setPurgeResult(null);
+
+    const cutoff = addDays(todayStr(), -365);
+
+    const [resResult, loanResult] = await Promise.all([
+      supabase.from('reservations').delete().lt('date', cutoff).select('id'),
+      supabase.from('instrument_reservations').delete().lt('date', cutoff).select('id'),
+    ]);
+
+    if (resResult.error || loanResult.error) {
+      const err = resResult.error || loanResult.error;
+      console.error('[admin] error depurando datos antiguos:', err);
+      setPurgeError(`No se pudo depurar: ${err.message}`);
+      setPurgeRunning(false);
+      return;
+    }
+
+    setPurgeResult({
+      reservations: (resResult.data || []).length,
+      loans: (loanResult.data || []).length,
+      cutoff,
+    });
+    setPurgeConfirming(false);
+    setPurgeRunning(false);
+  }
+
   function startEditInstrument(instrument) {
     setEditingInstrumentId(instrument.id);
     setEditName(instrument.name);
@@ -1312,6 +1446,16 @@ export default function AdminHome() {
           }}
         >
           Estadísticas
+        </button>
+        <button
+          onClick={() => setView('asistencia')}
+          style={{
+            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
+            border: 'none', borderBottom: view === 'asistencia' ? '2px solid #0B6E4F' : '2px solid transparent',
+            color: view === 'asistencia' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
+          }}
+        >
+          Asistencia
         </button>
         <a
           href="/admin/carga-masiva"
@@ -2644,6 +2788,144 @@ export default function AdminHome() {
                 </div>
               ))}
             </div>
+          </div>
+        </>
+      )}
+
+      {view === 'asistencia' && (
+        <>
+          <p style={{ fontSize: 13, color: '#5B6B60', marginBottom: 16 }}>
+            Asistencia por persona — cuánto de lo programado realmente se dictó, separando clases recurrentes (carga masiva) de reservas puntuales (por si alguien reprograma una clase perdida como reserva suelta).
+          </p>
+
+          <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 20 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Desde</label>
+              <input type="date" value={attFrom} onChange={(e) => setAttFrom(e.target.value)}
+                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13 }} />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hasta</label>
+              <input type="date" value={attTo} onChange={(e) => setAttTo(e.target.value)}
+                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13 }} />
+            </div>
+            <div style={{ flex: 1, minWidth: 180 }}>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Buscar por correo o nombre</label>
+              <input type="text" value={attSearch} onChange={(e) => setAttSearch(e.target.value)}
+                placeholder="Ej: jorge.gomezb@udea.edu.co"
+                style={{ width: '100%', padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }} />
+            </div>
+            <button
+              onClick={handleDownloadAttendance}
+              disabled={attLoading || attRows.length === 0}
+              style={{
+                padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: 8, border: '1px solid #0B6E4F',
+                color: '#0B6E4F', background: 'transparent', cursor: 'pointer',
+                opacity: attLoading || attRows.length === 0 ? 0.5 : 1,
+              }}
+            >
+              Descargar Excel
+            </button>
+            {attLoading && <span style={{ fontSize: 13, color: '#5B6B60' }}>Cargando…</span>}
+          </div>
+
+          {attError && (
+            <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 20, fontSize: 13 }}>
+              {attError}
+            </div>
+          )}
+
+          <div style={{ overflowX: 'auto', marginBottom: 32 }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
+                  <th style={{ padding: 8 }}>Persona</th>
+                  <th style={{ padding: 8 }}>Recurrentes</th>
+                  <th style={{ padding: 8 }}>% recurrentes</th>
+                  <th style={{ padding: 8 }}>Puntuales</th>
+                  <th style={{ padding: 8 }}>% puntuales</th>
+                  <th style={{ padding: 8 }}>% total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {attRows
+                  .filter((u) => {
+                    const q = attSearch.trim().toLowerCase();
+                    if (!q) return true;
+                    return u.email.toLowerCase().includes(q) || u.name.toLowerCase().includes(q);
+                  })
+                  .map((u) => (
+                    <tr key={u.userId} style={{ borderBottom: '1px solid #DBDCCF' }}>
+                      <td style={{ padding: 8 }}>
+                        {u.name}
+                        <br />
+                        <span style={{ color: '#5B6B60', fontSize: 11 }}>{u.email}</span>
+                      </td>
+                      <td style={{ padding: 8 }}>{u.recAttended}/{u.recTotal}</td>
+                      <td style={{ padding: 8, fontWeight: 600, color: u.recPct !== null && u.recPct < 70 ? '#A23E33' : '#16241C' }}>
+                        {u.recPct === null ? '—' : `${u.recPct}%`}
+                      </td>
+                      <td style={{ padding: 8 }}>{u.adhocAttended}/{u.adhocTotal}</td>
+                      <td style={{ padding: 8 }}>{u.adhocPct === null ? '—' : `${u.adhocPct}%`}</td>
+                      <td style={{ padding: 8, fontWeight: 700 }}>{u.totalPct === null ? '—' : `${u.totalPct}%`}</td>
+                    </tr>
+                  ))}
+                {attRows.length === 0 && !attLoading && (
+                  <tr>
+                    <td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                      Sin datos en este periodo.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18 }}>
+            <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 6px' }}>Depurar datos antiguos</h2>
+            <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 14px' }}>
+              El sistema solo necesita guardar los últimos 12 meses de reservas y préstamos de instrumentos. Este botón borra permanentemente todo lo anterior a esa fecha, para liberar espacio si hace falta. No afecta las cuentas de usuarios ni las sanciones.
+            </p>
+
+            {purgeError && (
+              <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                {purgeError}
+              </div>
+            )}
+            {purgeResult && (
+              <div style={{ background: '#E4F0EA', border: '1px solid #bcd9c9', color: '#084F39', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                Se borraron {purgeResult.reservations} reserva(s) y {purgeResult.loans} préstamo(s) de instrumentos anteriores al {purgeResult.cutoff}.
+              </div>
+            )}
+
+            {!purgeConfirming ? (
+              <button
+                onClick={() => setPurgeConfirming(true)}
+                style={{ padding: '9px 18px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #A23E33', color: '#A23E33', background: 'transparent', cursor: 'pointer' }}
+              >
+                Depurar datos de hace más de 12 meses
+              </button>
+            ) : (
+              <div>
+                <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  Esta acción no se puede deshacer. ¿Confirmas que quieres borrar permanentemente todas las reservas y préstamos anteriores al {addDays(todayStr(), -365)}?
+                </div>
+                <button
+                  onClick={handlePurgeOldData}
+                  disabled={purgeRunning}
+                  style={{ padding: '9px 18px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #A23E33', background: '#A23E33', color: '#fff', cursor: 'pointer', marginRight: 8 }}
+                >
+                  {purgeRunning ? 'Borrando...' : 'Sí, borrar permanentemente'}
+                </button>
+                <button
+                  onClick={() => setPurgeConfirming(false)}
+                  disabled={purgeRunning}
+                  style={{ padding: '9px 18px', fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', background: '#fff', cursor: 'pointer' }}
+                >
+                  Cancelar
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}
