@@ -35,6 +35,15 @@ export default function Home() {
           Solicitar una reserva
         </a>
         <a
+          href="/prestar"
+          style={{
+            padding: 10, fontSize: 13, borderRadius: 8, border: '1px solid #DBDCCF',
+            background: '#fff', color: '#16241C', textDecoration: 'none', display: 'block', boxSizing: 'border-box',
+          }}
+        >
+          Prestar un instrumento
+        </a>
+        <a
           href="/cancelar"
           style={{
             padding: 10, fontSize: 13, borderRadius: 8, border: '1px solid #DBDCCF',
