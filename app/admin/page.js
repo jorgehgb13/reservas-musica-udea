@@ -135,7 +135,7 @@ export default function AdminHome() {
   const [session, setSession] = useState(undefined);
   const router = useRouter();
 
-  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos' | 'semana' | 'estadisticas' | 'aprobaciones'
+  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos' | 'semana' | 'estadisticas' | 'aprobaciones' | 'manual'
   const [date, setDate] = useState(todayStr());
   const [reservations, setReservations] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -147,6 +147,28 @@ export default function AdminHome() {
   const [pendingApprovalsLoading, setPendingApprovalsLoading] = useState(false);
   const [pendingApprovalsError, setPendingApprovalsError] = useState(null);
   const [pendingActionId, setPendingActionId] = useState(null);
+
+  // ---------- Reserva manual (sin restricciones) ----------
+  const [manualEmail, setManualEmail] = useState('@udea.edu.co');
+  const [manualName, setManualName] = useState('');
+  const [manualNeedsName, setManualNeedsName] = useState(false);
+  const [manualRoomId, setManualRoomId] = useState('');
+  const [manualDate, setManualDate] = useState(todayStr());
+  const [manualStart, setManualStart] = useState('08:00');
+  const [manualEnd, setManualEnd] = useState('10:00');
+  const [manualNotes, setManualNotes] = useState('');
+  const [manualSubmitting, setManualSubmitting] = useState(false);
+  const [manualFormError, setManualFormError] = useState(null);
+  const [manualFormSuccess, setManualFormSuccess] = useState(null);
+
+  // ---------- Bloquear espacio ----------
+  const [blockRoomId, setBlockRoomId] = useState('');
+  const [blockDateFrom, setBlockDateFrom] = useState(todayStr());
+  const [blockDateTo, setBlockDateTo] = useState(todayStr());
+  const [blockReason, setBlockReason] = useState('');
+  const [blockSubmitting, setBlockSubmitting] = useState(false);
+  const [blockError, setBlockError] = useState(null);
+  const [blockResults, setBlockResults] = useState(null);
 
   const [rooms, setRooms] = useState([]);
   const [roomsError, setRoomsError] = useState(null);
@@ -233,7 +255,7 @@ export default function AdminHome() {
     setListError(null);
     const { data, error } = await supabase
       .from('reservations')
-      .select('id, room_id, date, start_time, end_time, status, checked_in_at, rooms ( name, type ), app_users ( name, email )')
+      .select('id, room_id, date, start_time, end_time, status, checked_in_at, returned_at, rooms ( name, type ), app_users ( name, email )')
       .eq('date', date)
       .neq('status', 'cancelada')
       .neq('status', 'rechazada')
@@ -465,6 +487,32 @@ export default function AdminHome() {
     };
   }, [sEmail]);
 
+  useEffect(() => {
+    const email = manualEmail.trim().toLowerCase();
+    if (!EMAIL_REGEX.test(email)) {
+      setManualNeedsName(false);
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from('app_users')
+      .select('id, name')
+      .eq('email', email)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        if (data) {
+          setManualNeedsName(false);
+          setManualName(data.name || '');
+        } else {
+          setManualNeedsName(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [manualEmail]);
+
   async function handleCheckIn(id) {
     setActionId(id);
     const { error } = await supabase
@@ -474,6 +522,21 @@ export default function AdminHome() {
     if (error) {
       console.error('[admin] error confirmando asistencia:', error);
       setListError(`No se pudo confirmar la asistencia: ${error.message}`);
+    } else {
+      await loadReservations();
+    }
+    setActionId(null);
+  }
+
+  async function handleFinishReservation(id) {
+    setActionId(id);
+    const { error } = await supabase
+      .from('reservations')
+      .update({ returned_at: new Date().toISOString() })
+      .eq('id', id);
+    if (error) {
+      console.error('[admin] error terminando reserva:', error);
+      setListError(`No se pudo marcar como terminada: ${error.message}`);
     } else {
       await loadReservations();
     }
@@ -553,6 +616,157 @@ export default function AdminHome() {
       await loadPendingApprovals();
     }
     setPendingActionId(null);
+  }
+
+  async function handleCreateManualReservation(e) {
+    e.preventDefault();
+    setManualFormError(null);
+    setManualFormSuccess(null);
+
+    const email = manualEmail.trim().toLowerCase();
+    if (!EMAIL_REGEX.test(email)) {
+      setManualFormError('Usa un correo institucional con dominio @udea.edu.co.');
+      return;
+    }
+    if (manualNeedsName && !manualName.trim()) {
+      setManualFormError('Esta persona no está registrada todavía — ingresa su nombre completo.');
+      return;
+    }
+    if (!manualRoomId) {
+      setManualFormError('Elige un espacio.');
+      return;
+    }
+    if (!manualStart || !manualEnd || manualEnd <= manualStart) {
+      setManualFormError('La hora de fin debe ser después de la hora de inicio.');
+      return;
+    }
+
+    setManualSubmitting(true);
+    try {
+      let userId;
+      const { data: existingUser, error: findError } = await supabase
+        .from('app_users')
+        .select('id')
+        .eq('email', email)
+        .maybeSingle();
+
+      if (findError) {
+        setManualFormError(`No se pudo buscar el usuario: ${findError.message}`);
+        setManualSubmitting(false);
+        return;
+      }
+
+      if (existingUser) {
+        userId = existingUser.id;
+      } else {
+        const { data: newUser, error: insertUserError } = await supabase
+          .from('app_users')
+          .insert({ email, name: manualName.trim() })
+          .select('id')
+          .single();
+        if (insertUserError) {
+          setManualFormError(`No se pudo crear la persona: ${insertUserError.message}`);
+          setManualSubmitting(false);
+          return;
+        }
+        userId = newUser.id;
+      }
+
+      const { error: insertError } = await supabase.from('reservations').insert({
+        room_id: manualRoomId,
+        user_id: userId,
+        date: manualDate,
+        start_time: manualStart,
+        end_time: manualEnd,
+        status: 'confirmada',
+        requires_approval: false,
+        forced: true,
+        notes: manualNotes.trim() || null,
+      });
+
+      if (insertError) {
+        if (insertError.code === '23P01') {
+          setManualFormError('Ese espacio ya está ocupado en ese horario. Elige otro horario, o cancela la reserva existente primero.');
+        } else {
+          setManualFormError(`No se pudo crear la reserva: ${insertError.message}`);
+        }
+        setManualSubmitting(false);
+        return;
+      }
+
+      setManualFormSuccess('Reserva creada y confirmada correctamente.');
+      setManualEmail('@udea.edu.co');
+      setManualName('');
+      setManualNotes('');
+      await loadReservations();
+    } catch (err) {
+      console.error('[admin] error inesperado creando reserva manual:', err);
+      setManualFormError('Ocurrió un error inesperado. Intenta de nuevo.');
+    } finally {
+      setManualSubmitting(false);
+    }
+  }
+
+  async function handleBlockRoom(e) {
+    e.preventDefault();
+    setBlockError(null);
+    setBlockResults(null);
+
+    if (!blockRoomId) {
+      setBlockError('Elige un espacio.');
+      return;
+    }
+    if (blockDateTo < blockDateFrom) {
+      setBlockError('La fecha final debe ser igual o posterior a la fecha inicial.');
+      return;
+    }
+
+    setBlockSubmitting(true);
+    try {
+      const dates = [];
+      let cursor = blockDateFrom;
+      let guard = 0;
+      while (cursor <= blockDateTo && guard < 366) {
+        dates.push(cursor);
+        cursor = addDays(cursor, 1);
+        guard += 1;
+      }
+
+      const startTime = `${pad2(OPERATING_START)}:00`;
+      const endTime = `${pad2(OPERATING_END)}:00`;
+      const noteText = `Bloqueado por administrador${blockReason.trim() ? `: ${blockReason.trim()}` : ''}`;
+
+      let blocked = 0;
+      const skippedDates = [];
+
+      for (const d of dates) {
+        const { error } = await supabase.from('reservations').insert({
+          room_id: blockRoomId,
+          user_id: session.user.id,
+          date: d,
+          start_time: startTime,
+          end_time: endTime,
+          status: 'confirmada',
+          requires_approval: false,
+          forced: true,
+          notes: noteText,
+        });
+        if (error) {
+          skippedDates.push(d);
+        } else {
+          blocked += 1;
+        }
+      }
+
+      setBlockResults({ blocked, skippedDates, total: dates.length });
+      setBlockReason('');
+      await loadReservations();
+    } catch (err) {
+      console.error('[admin] error inesperado bloqueando espacio:', err);
+      setBlockError('Ocurrió un error inesperado. Intenta de nuevo.');
+    } finally {
+      setBlockSubmitting(false);
+    }
   }
 
   async function handleLogout() {
@@ -1020,6 +1234,16 @@ export default function AdminHome() {
           )}
         </button>
         <button
+          onClick={() => setView('manual')}
+          style={{
+            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
+            border: 'none', borderBottom: view === 'manual' ? '2px solid #0B6E4F' : '2px solid transparent',
+            color: view === 'manual' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
+          }}
+        >
+          Reserva manual
+        </button>
+        <button
           onClick={() => setView('ocupacion')}
           style={{
             padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
@@ -1121,6 +1345,7 @@ export default function AdminHome() {
                 )}
                 {reservations.map((r) => {
                   const canCheckIn = r.status === 'confirmada' && !r.checked_in_at;
+                  const canFinish = r.status === 'confirmada' && !r.returned_at;
                   const canCancel = r.status !== 'cancelada';
                   const canApproveReject = r.status === 'pendiente';
                   const colors = STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
@@ -1142,6 +1367,9 @@ export default function AdminHome() {
                         {r.checked_in_at && (
                           <div style={{ fontSize: 10, color: '#5B6B60', marginTop: 2 }}>asistió</div>
                         )}
+                        {r.returned_at && (
+                          <div style={{ fontSize: 10, color: '#5B6B60', marginTop: 2 }}>espacio entregado</div>
+                        )}
                       </td>
                       <td style={{ padding: 8, whiteSpace: 'nowrap' }}>
                         {canApproveReject && (
@@ -1160,6 +1388,12 @@ export default function AdminHome() {
                           <button onClick={() => handleCheckIn(r.id)} disabled={actionId === r.id}
                             style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #16241C', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}>
                             Confirmar asistencia
+                          </button>
+                        )}
+                        {canFinish && (
+                          <button onClick={() => handleFinishReservation(r.id)} disabled={actionId === r.id}
+                            style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #5B3FA0', color: '#5B3FA0', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}>
+                            Terminar reserva
                           </button>
                         )}
                         {canCancel && (
@@ -1235,6 +1469,224 @@ export default function AdminHome() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </>
+      )}
+
+      {view === 'manual' && (
+        <>
+          <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18, marginBottom: 26 }}>
+            <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 6px' }}>Crear reserva sin restricciones</h2>
+            <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 14px' }}>
+              Se crea directamente confirmada, sin límite de duración ni de una-reserva-a-la-vez. La única restricción que se mantiene es que el espacio esté libre en ese horario.
+            </p>
+
+            <form onSubmit={handleCreateManualReservation}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Correo institucional</label>
+                  <input
+                    type="email"
+                    value={manualEmail}
+                    onChange={(e) => setManualEmail(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    Nombre {manualNeedsName ? '(persona nueva, requerido)' : '(opcional)'}
+                  </label>
+                  <input
+                    type="text"
+                    value={manualName}
+                    onChange={(e) => setManualName(e.target.value)}
+                    required={manualNeedsName}
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Espacio</label>
+                <select
+                  value={manualRoomId}
+                  onChange={(e) => setManualRoomId(e.target.value)}
+                  required
+                  style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                >
+                  <option value="">Selecciona un espacio…</option>
+                  {ROOM_TYPE_ORDER.map((t) => {
+                    const roomsOfType = rooms.filter((r) => r.type === t);
+                    if (roomsOfType.length === 0) return null;
+                    return (
+                      <optgroup key={t} label={ROOM_TYPE_LABEL[t]}>
+                        {roomsOfType.map((r) => (
+                          <option key={r.id} value={r.id}>{r.name}</option>
+                        ))}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Fecha</label>
+                  <input
+                    type="date"
+                    value={manualDate}
+                    onChange={(e) => setManualDate(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hora inicio</label>
+                  <input
+                    type="time"
+                    value={manualStart}
+                    onChange={(e) => setManualStart(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hora fin</label>
+                  <input
+                    type="time"
+                    value={manualEnd}
+                    onChange={(e) => setManualEnd(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Nota (opcional)</label>
+                <input
+                  type="text"
+                  value={manualNotes}
+                  onChange={(e) => setManualNotes(e.target.value)}
+                  placeholder="Ej: ensayo especial autorizado por dirección"
+                  style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              {manualFormError && (
+                <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {manualFormError}
+                </div>
+              )}
+              {manualFormSuccess && (
+                <div style={{ background: '#E4F0EA', border: '1px solid #bcd9c9', color: '#084F39', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {manualFormSuccess}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={manualSubmitting}
+                style={{
+                  padding: '9px 18px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #0B6E4F',
+                  background: '#0B6E4F', color: '#fff', cursor: manualSubmitting ? 'not-allowed' : 'pointer', opacity: manualSubmitting ? 0.7 : 1,
+                }}
+              >
+                {manualSubmitting ? 'Guardando...' : 'Crear reserva confirmada'}
+              </button>
+            </form>
+          </div>
+
+          <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18, marginBottom: 26 }}>
+            <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 6px' }}>Bloquear espacio</h2>
+            <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 14px' }}>
+              Ocupa el espacio de 6:00 a.m. a 8:00 p.m. en cada día del rango, para que nadie pueda reservarlo (ej. mantenimiento). Si algún día ya tiene algo reservado, ese día se omite y se reporta.
+            </p>
+
+            <form onSubmit={handleBlockRoom}>
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Espacio</label>
+                <select
+                  value={blockRoomId}
+                  onChange={(e) => setBlockRoomId(e.target.value)}
+                  required
+                  style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                >
+                  <option value="">Selecciona un espacio…</option>
+                  {ROOM_TYPE_ORDER.map((t) => {
+                    const roomsOfType = rooms.filter((r) => r.type === t);
+                    if (roomsOfType.length === 0) return null;
+                    return (
+                      <optgroup key={t} label={ROOM_TYPE_LABEL[t]}>
+                        {roomsOfType.map((r) => (
+                          <option key={r.id} value={r.id}>{r.name}</option>
+                        ))}
+                      </optgroup>
+                    );
+                  })}
+                </select>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Desde</label>
+                  <input
+                    type="date"
+                    value={blockDateFrom}
+                    onChange={(e) => setBlockDateFrom(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hasta</label>
+                  <input
+                    type="date"
+                    value={blockDateTo}
+                    onChange={(e) => setBlockDateTo(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Motivo (opcional)</label>
+                <input
+                  type="text"
+                  value={blockReason}
+                  onChange={(e) => setBlockReason(e.target.value)}
+                  placeholder="Ej: mantenimiento eléctrico"
+                  style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              {blockError && (
+                <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {blockError}
+                </div>
+              )}
+              {blockResults && (
+                <div style={{ background: '#E4F0EA', border: '1px solid #bcd9c9', color: '#084F39', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {blockResults.blocked} de {blockResults.total} día(s) bloqueado(s) correctamente.
+                  {blockResults.skippedDates.length > 0 && (
+                    <> Días que ya tenían algo y no se pudieron bloquear: {blockResults.skippedDates.join(', ')}.</>
+                  )}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={blockSubmitting}
+                style={{
+                  padding: '9px 18px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #A23E33',
+                  color: '#A23E33', background: 'transparent', cursor: blockSubmitting ? 'not-allowed' : 'pointer', opacity: blockSubmitting ? 0.7 : 1,
+                }}
+              >
+                {blockSubmitting ? 'Bloqueando...' : 'Bloquear espacio'}
+              </button>
+            </form>
           </div>
         </>
       )}
