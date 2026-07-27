@@ -7,6 +7,7 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
 import { sendEmail, verificationEmailHtml } from '../../../../lib/email';
+import { expireNoShowReservations } from '../../../../lib/expireNoShows';
 
 const TYPE_APPROVAL = { cubiculo: false, aula: true, auditorio: true };
 // Cubículos que, por excepción, también necesitan aprobación del
@@ -88,6 +89,12 @@ export async function POST(request) {
         { status: 403 }
       );
     }
+
+    // Antes de revisar conflictos, liberamos cualquier reserva de este
+    // espacio que ya venció (confirmada, sin asistencia, 15+ minutos
+    // después de su hora de inicio) — así no choca con algo que en la
+    // práctica ya está libre.
+    await expireNoShowReservations(roomId);
 
     const { data: conflicts, error: conflictError } = await supabaseAdmin
       .from('reservations')
