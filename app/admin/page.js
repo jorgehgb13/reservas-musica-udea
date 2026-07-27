@@ -158,7 +158,7 @@ export default function AdminHome() {
     setSanctionsError(null);
     const { data, error } = await supabase
       .from('sanctions')
-      .select('id, reason, until, created_at, app_users ( name, email )')
+      .select('id, reason, until, created_at, app_users!sanctions_user_id_fkey ( name, email )')
       .order('until', { ascending: false });
 
     if (error) {
