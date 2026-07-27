@@ -595,11 +595,20 @@ export default function AdminHome() {
           style={{
             padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
             border: 'none', borderBottom: view === 'instrumentos' ? '2px solid #0B6E4F' : '2px solid transparent',
-            color: view === 'instrumentos' ? '#0B6E4F' : '#5B6B60',
+            color: view === 'instrumentos' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
           }}
         >
           Instrumentos
         </button>
+        <a
+          href="/admin/carga-masiva"
+          style={{
+            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
+            border: 'none', borderBottom: '2px solid transparent', color: '#5B6B60', textDecoration: 'none',
+          }}
+        >
+          Carga masiva
+        </a>
       </div>
 
       {(view === 'lista' || view === 'ocupacion') && (
