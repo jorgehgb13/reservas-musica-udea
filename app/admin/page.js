@@ -13,6 +13,18 @@ function toMinutes(t) {
   return h * 60 + m;
 }
 
+function pad2(n) {
+  return String(n).padStart(2, '0');
+}
+
+// Convierte un Date a formato "YYYY-MM-DDTHH:mm" para inputs datetime-local,
+// usando la hora local del navegador del administrador (Colombia).
+function toLocalInputValue(dt) {
+  return `${dt.getFullYear()}-${pad2(dt.getMonth() + 1)}-${pad2(dt.getDate())}T${pad2(dt.getHours())}:${pad2(dt.getMinutes())}`;
+}
+
+const EMAIL_REGEX = /^[^\s@]+@udea\.edu\.co$/i;
+
 const STATUS_LABEL = {
   sin_verificar: 'Sin verificar',
   pendiente: 'Pendiente',
@@ -62,7 +74,7 @@ export default function AdminHome() {
   const [session, setSession] = useState(undefined);
   const router = useRouter();
 
-  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion'
+  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones'
   const [date, setDate] = useState(todayStr());
   const [reservations, setReservations] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -72,6 +84,22 @@ export default function AdminHome() {
   const [rooms, setRooms] = useState([]);
   const [roomsError, setRoomsError] = useState(null);
   const [occupancyType, setOccupancyType] = useState('todos');
+
+  // ---------- Sanciones ----------
+  const [sanctions, setSanctions] = useState([]);
+  const [sanctionsLoading, setSanctionsLoading] = useState(false);
+  const [sanctionsError, setSanctionsError] = useState(null);
+  const [showAllSanctions, setShowAllSanctions] = useState(false);
+  const [liftingId, setLiftingId] = useState(null);
+
+  const [sEmail, setSEmail] = useState('@udea.edu.co');
+  const [sName, setSName] = useState('');
+  const [sReason, setSReason] = useState('');
+  const [sUntil, setSUntil] = useState(() => toLocalInputValue(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)));
+  const [sSubmitting, setSSubmitting] = useState(false);
+  const [sFormError, setSFormError] = useState(null);
+  const [sFormSuccess, setSFormSuccess] = useState(null);
+  const [sNeedsName, setSNeedsName] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -124,6 +152,56 @@ export default function AdminHome() {
         }
       });
   }, [session]);
+
+  const loadSanctions = useCallback(async () => {
+    setSanctionsLoading(true);
+    setSanctionsError(null);
+    const { data, error } = await supabase
+      .from('sanctions')
+      .select('id, reason, until, created_at, app_users ( name, email )')
+      .order('until', { ascending: false });
+
+    if (error) {
+      console.error('[admin] error cargando sanciones:', error);
+      setSanctionsError(`No se pudieron cargar las sanciones: ${error.message}`);
+      setSanctions([]);
+    } else {
+      setSanctions(data || []);
+    }
+    setSanctionsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (session && view === 'sanciones') loadSanctions();
+  }, [session, view, loadSanctions]);
+
+  // Cuando cambia el correo escrito, revisamos si ya existe esa persona
+  // para no pedir el nombre otra vez si ya la tenemos registrada.
+  useEffect(() => {
+    const email = sEmail.trim().toLowerCase();
+    if (!EMAIL_REGEX.test(email)) {
+      setSNeedsName(false);
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from('app_users')
+      .select('id, name')
+      .eq('email', email)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        if (data) {
+          setSNeedsName(false);
+          setSName(data.name || '');
+        } else {
+          setSNeedsName(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sEmail]);
 
   async function handleCheckIn(id) {
     setActionId(id);
@@ -190,6 +268,102 @@ export default function AdminHome() {
     router.push('/admin/login');
   }
 
+  async function handleCreateSanction(e) {
+    e.preventDefault();
+    setSFormError(null);
+    setSFormSuccess(null);
+
+    const email = sEmail.trim().toLowerCase();
+    if (!EMAIL_REGEX.test(email)) {
+      setSFormError('Usa un correo institucional con dominio @udea.edu.co.');
+      return;
+    }
+    if (sNeedsName && !sName.trim()) {
+      setSFormError('Esta persona no está registrada todavía — ingresa su nombre completo.');
+      return;
+    }
+    if (!sUntil) {
+      setSFormError('Elige hasta cuándo dura la sanción.');
+      return;
+    }
+    const untilIso = new Date(`${sUntil}:00-05:00`).toISOString();
+    if (new Date(untilIso) <= new Date()) {
+      setSFormError('La fecha de la sanción debe ser en el futuro.');
+      return;
+    }
+
+    setSSubmitting(true);
+    try {
+      let userId;
+      const { data: existingUser, error: findError } = await supabase
+        .from('app_users')
+        .select('id')
+        .eq('email', email)
+        .maybeSingle();
+
+      if (findError) {
+        setSFormError(`No se pudo buscar el usuario: ${findError.message}`);
+        setSSubmitting(false);
+        return;
+      }
+
+      if (existingUser) {
+        userId = existingUser.id;
+      } else {
+        const { data: newUser, error: insertUserError } = await supabase
+          .from('app_users')
+          .insert({ email, name: sName.trim() })
+          .select('id')
+          .single();
+        if (insertUserError) {
+          setSFormError(`No se pudo crear la persona: ${insertUserError.message}`);
+          setSSubmitting(false);
+          return;
+        }
+        userId = newUser.id;
+      }
+
+      const { error: insertSanctionError } = await supabase
+        .from('sanctions')
+        .insert({
+          user_id: userId,
+          reason: sReason.trim() || null,
+          until: untilIso,
+          created_by: session.user.id,
+        });
+
+      if (insertSanctionError) {
+        setSFormError(`No se pudo crear la sanción: ${insertSanctionError.message}`);
+        setSSubmitting(false);
+        return;
+      }
+
+      setSFormSuccess('Sanción creada correctamente.');
+      setSEmail('@udea.edu.co');
+      setSName('');
+      setSReason('');
+      setSUntil(toLocalInputValue(new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)));
+      await loadSanctions();
+    } catch (err) {
+      console.error('[admin] error inesperado creando sanción:', err);
+      setSFormError('Ocurrió un error inesperado. Intenta de nuevo.');
+    } finally {
+      setSSubmitting(false);
+    }
+  }
+
+  async function handleLiftSanction(id) {
+    setLiftingId(id);
+    const { error } = await supabase.from('sanctions').delete().eq('id', id);
+    if (error) {
+      console.error('[admin] error levantando sanción:', error);
+      setSanctionsError(`No se pudo levantar la sanción: ${error.message}`);
+    } else {
+      await loadSanctions();
+    }
+    setLiftingId(null);
+  }
+
   if (session === undefined) {
     return <main style={{ padding: 40, textAlign: 'center', color: '#5B6B60' }}>Cargando…</main>;
   }
@@ -209,6 +383,9 @@ export default function AdminHome() {
       ? ROOM_TYPE_ORDER.map((t) => ({ type: t, rooms: rooms.filter((r) => r.type === t) })).filter((g) => g.rooms.length > 0)
       : [{ type: occupancyType, rooms: visibleRooms }];
 
+  const now = new Date();
+  const visibleSanctions = showAllSanctions ? sanctions : sanctions.filter((s) => new Date(s.until) > now);
+
   return (
     <main style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
@@ -224,7 +401,7 @@ export default function AdminHome() {
         </button>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 20, borderBottom: '1px solid #DBDCCF' }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 20, borderBottom: '1px solid #DBDCCF', flexWrap: 'wrap' }}>
         <button
           onClick={() => setView('lista')}
           style={{
@@ -240,22 +417,34 @@ export default function AdminHome() {
           style={{
             padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
             border: 'none', borderBottom: view === 'ocupacion' ? '2px solid #0B6E4F' : '2px solid transparent',
-            color: view === 'ocupacion' ? '#0B6E4F' : '#5B6B60',
+            color: view === 'ocupacion' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
           }}
         >
           Ocupación
         </button>
+        <button
+          onClick={() => setView('sanciones')}
+          style={{
+            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
+            border: 'none', borderBottom: view === 'sanciones' ? '2px solid #0B6E4F' : '2px solid transparent',
+            color: view === 'sanciones' ? '#0B6E4F' : '#5B6B60',
+          }}
+        >
+          Sanciones
+        </button>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-          style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14 }} />
-        {view === 'lista' && (
-          <span style={{ fontSize: 13, color: '#5B6B60' }}>
-            {loadingList ? 'Cargando…' : `${reservations.length} reserva(s)`}
-          </span>
-        )}
-      </div>
+      {(view === 'lista' || view === 'ocupacion') && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+            style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14 }} />
+          {view === 'lista' && (
+            <span style={{ fontSize: 13, color: '#5B6B60' }}>
+              {loadingList ? 'Cargando…' : `${reservations.length} reserva(s)`}
+            </span>
+          )}
+        </div>
+      )}
 
       {view === 'lista' && (
         <>
@@ -443,6 +632,170 @@ export default function AdminHome() {
               </div>
             </div>
           ))}
+        </>
+      )}
+
+      {view === 'sanciones' && (
+        <>
+          <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18, marginBottom: 26 }}>
+            <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 14px' }}>Sancionar a alguien</h2>
+
+            <form onSubmit={handleCreateSanction}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    Correo institucional
+                  </label>
+                  <input
+                    type="email"
+                    value={sEmail}
+                    onChange={(e) => setSEmail(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    Nombre {sNeedsName ? '(persona nueva, requerido)' : '(opcional)'}
+                  </label>
+                  <input
+                    type="text"
+                    value={sName}
+                    onChange={(e) => setSName(e.target.value)}
+                    required={sNeedsName}
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                  Motivo (opcional, pero recomendado)
+                </label>
+                <input
+                  type="text"
+                  value={sReason}
+                  onChange={(e) => setSReason(e.target.value)}
+                  placeholder="Ej: no se presentó a 3 reservas seguidas"
+                  style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                />
+              </div>
+
+              <div style={{ marginBottom: 14 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                  Sancionado hasta
+                </label>
+                <input
+                  type="datetime-local"
+                  value={sUntil}
+                  onChange={(e) => setSUntil(e.target.value)}
+                  required
+                  style={{ padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF' }}
+                />
+              </div>
+
+              {sFormError && (
+                <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {sFormError}
+                </div>
+              )}
+              {sFormSuccess && (
+                <div style={{ background: '#E4F0EA', border: '1px solid #bcd9c9', color: '#084F39', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {sFormSuccess}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={sSubmitting}
+                style={{
+                  padding: '9px 18px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #A23E33',
+                  background: '#A23E33', color: '#fff', cursor: sSubmitting ? 'not-allowed' : 'pointer', opacity: sSubmitting ? 0.7 : 1,
+                }}
+              >
+                {sSubmitting ? 'Guardando...' : 'Sancionar'}
+              </button>
+            </form>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: 0 }}>
+              {showAllSanctions ? 'Historial de sanciones' : 'Sanciones activas'}
+            </h2>
+            <button
+              onClick={() => setShowAllSanctions((v) => !v)}
+              style={{ padding: '6px 12px', fontSize: 12, borderRadius: 6, border: '1px solid #DBDCCF', background: '#fff', cursor: 'pointer' }}
+            >
+              {showAllSanctions ? 'Ver solo activas' : 'Ver historial completo'}
+            </button>
+          </div>
+
+          {sanctionsError && (
+            <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+              {sanctionsError}
+            </div>
+          )}
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
+                  <th style={{ padding: 8 }}>Persona</th>
+                  <th style={{ padding: 8 }}>Motivo</th>
+                  <th style={{ padding: 8 }}>Hasta</th>
+                  <th style={{ padding: 8 }}>Estado</th>
+                  <th style={{ padding: 8 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleSanctions.length === 0 && !sanctionsLoading && (
+                  <tr>
+                    <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                      {showAllSanctions ? 'No hay sanciones registradas.' : 'No hay sanciones activas en este momento.'}
+                    </td>
+                  </tr>
+                )}
+                {visibleSanctions.map((s) => {
+                  const isActive = new Date(s.until) > now;
+                  return (
+                    <tr key={s.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
+                      <td style={{ padding: 8 }}>
+                        {s.app_users?.name || '—'}
+                        <br />
+                        <span style={{ color: '#5B6B60', fontSize: 11 }}>{s.app_users?.email}</span>
+                      </td>
+                      <td style={{ padding: 8 }}>{s.reason || '—'}</td>
+                      <td style={{ padding: 8 }}>
+                        {new Date(s.until).toLocaleString('es-CO', { timeZone: 'America/Bogota' })}
+                      </td>
+                      <td style={{ padding: 8 }}>
+                        <span
+                          style={{
+                            background: isActive ? '#F7E8E5' : '#eee',
+                            color: isActive ? '#A23E33' : '#888',
+                            fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20,
+                          }}
+                        >
+                          {isActive ? 'Activa' : 'Vencida'}
+                        </span>
+                      </td>
+                      <td style={{ padding: 8 }}>
+                        {isActive && (
+                          <button
+                            onClick={() => handleLiftSanction(s.id)}
+                            disabled={liftingId === s.id}
+                            style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #16241C', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
+                          >
+                            {liftingId === s.id ? 'Levantando...' : 'Levantar sanción'}
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </>
       )}
     </main>
