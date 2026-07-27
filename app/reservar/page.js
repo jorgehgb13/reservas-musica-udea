@@ -65,7 +65,6 @@ export default function Reservar() {
 
   // Paso 4 y 5
   const [reservationId, setReservationId] = useState(null);
-  const [verificationCode, setVerificationCode] = useState(null);
   const [codeInput, setCodeInput] = useState('');
   const [verifyError, setVerifyError] = useState(null);
   const [bounced, setBounced] = useState(false);
@@ -178,7 +177,6 @@ export default function Reservar() {
         return;
       }
       setReservationId(data.reservationId);
-      setVerificationCode(data.code);
       setCodeInput('');
       setVerifyError(null);
       setBounced(false);
@@ -473,6 +471,9 @@ export default function Reservar() {
           Te enviamos un código de 6 dígitos a <strong>{email}</strong>. Tu reserva no queda en firme hasta que lo
           confirmes aquí. Tienes 10 minutos.
         </p>
+        <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 16 }}>
+          Si no lo ves en unos minutos, revisa tu carpeta de spam o correo no deseado — es probable que llegue ahí.
+        </div>
 
         {verifyError && (
           <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
@@ -495,17 +496,6 @@ export default function Reservar() {
           style={{ width: '100%', padding: 8, background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: loading ? 'default' : 'pointer', textDecoration: 'underline' }}>
           El correo no existe / no me llegó nada (simular rebote)
         </button>
-
-        <div style={{ border: '1px solid #DBDCCF', borderRadius: 10, padding: 14, background: '#F5F6F0', marginTop: 16 }}>
-          <div style={{ fontSize: 11, color: '#5B6B60', marginBottom: 8 }}>
-            Vista previa del correo (simulado) — en producción, el código solo llegaría si el correo existe de verdad.
-          </div>
-          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Tu código de verificación</div>
-          <div style={{ fontSize: 22, letterSpacing: 6, textAlign: 'center', margin: '10px 0', fontFamily: 'monospace' }}>
-            {verificationCode}
-          </div>
-          <p style={{ fontSize: 12, color: '#5B6B60', margin: 0 }}>Válido por 10 minutos.</p>
-        </div>
       </main>
     );
   }
