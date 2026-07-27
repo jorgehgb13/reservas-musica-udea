@@ -3,13 +3,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 
-const CATEGORY_META = {
-  viento: { label: 'Viento', icon: '🎺' },
-  cuerda: { label: 'Cuerda', icon: '🎻' },
-  percusion: { label: 'Percusión', icon: '🥁' },
-  teclado: { label: 'Teclado', icon: '🎹' },
-};
-
 const OPERATING_START = 6;
 const OPERATING_END = 20;
 const MAX_DURATION_MIN = 240; // 4 horas
@@ -55,8 +48,7 @@ export default function PrestarInstrumento() {
   const [loading, setLoading] = useState(false);
   const [userId, setUserId] = useState(null);
 
-  // Paso 2 y 3
-  const [category, setCategory] = useState(null);
+  // Paso 2
   const [instruments, setInstruments] = useState([]);
   const [instrumentId, setInstrumentId] = useState(null);
   const [date, setDate] = useState(todayStr());
@@ -65,7 +57,7 @@ export default function PrestarInstrumento() {
   const [busy, setBusy] = useState([]);
   const [loadingAvailability, setLoadingAvailability] = useState(false);
 
-  // Paso 4 y 5
+  // Paso 3 y 4
   const [reservationId, setReservationId] = useState(null);
   const [codeInput, setCodeInput] = useState('');
   const [verifyError, setVerifyError] = useState(null);
@@ -95,24 +87,10 @@ export default function PrestarInstrumento() {
         return;
       }
       setUserId(data.userId);
-      setStep(2);
-    } catch (err) {
-      setError(`Error de conexión: ${err.message}`);
-    } finally {
-      setLoading(false);
-    }
-  }
 
-  // ---------- PASO 2: elegir categoría ----------
-  async function selectCategory(cat) {
-    setCategory(cat);
-    setError(null);
-    setLoading(true);
-    try {
-      const { data, error: fetchError } = await supabase
+      const { data: instrumentsData, error: fetchError } = await supabase
         .from('instruments')
         .select('id, name, category, inventory_number')
-        .eq('category', cat)
         .eq('active', true)
         .order('name', { ascending: true });
 
@@ -121,14 +99,14 @@ export default function PrestarInstrumento() {
         setLoading(false);
         return;
       }
-      if (!data || data.length === 0) {
-        setError('No hay instrumentos disponibles en esta categoría por ahora.');
+      if (!instrumentsData || instrumentsData.length === 0) {
+        setError('No hay instrumentos disponibles por ahora.');
         setLoading(false);
         return;
       }
-      setInstruments(data);
-      setInstrumentId(data[0].id);
-      setStep(3);
+      setInstruments(instrumentsData);
+      setInstrumentId(instrumentsData[0].id);
+      setStep(2);
     } catch (err) {
       setError(`Error de conexión: ${err.message}`);
     } finally {
@@ -136,9 +114,9 @@ export default function PrestarInstrumento() {
     }
   }
 
-  // ---------- PASO 3: disponibilidad real cada vez que cambia instrumento/fecha ----------
+  // ---------- PASO 2: disponibilidad real cada vez que cambia instrumento/fecha ----------
   useEffect(() => {
-    if (step !== 3 || !instrumentId || !date) return;
+    if (step !== 2 || !instrumentId || !date) return;
     let cancelled = false;
 
     async function loadAvailability() {
@@ -167,7 +145,7 @@ export default function PrestarInstrumento() {
 
   const end = start ? addMinutes(start, duration) : null;
 
-  // ---------- PASO 4: crear el préstamo real ----------
+  // ---------- PASO 3: crear el préstamo real ----------
   async function handleCreateLoan() {
     setError(null);
     setLoading(true);
@@ -187,7 +165,7 @@ export default function PrestarInstrumento() {
       setCodeInput('');
       setVerifyError(null);
       setBounced(false);
-      setStep(5);
+      setStep(4);
     } catch (err) {
       setError(`Error de conexión: ${err.message}`);
     } finally {
@@ -195,7 +173,7 @@ export default function PrestarInstrumento() {
     }
   }
 
-  // ---------- PASO 5: verificar el código ----------
+  // ---------- PASO 4: verificar el código ----------
   async function handleVerifyCode() {
     setVerifyError(null);
     setLoading(true);
@@ -211,7 +189,7 @@ export default function PrestarInstrumento() {
         setLoading(false);
         return;
       }
-      setStep(6);
+      setStep(5);
     } catch (err) {
       setVerifyError(`Error de conexión: ${err.message}`);
     } finally {
@@ -285,53 +263,22 @@ export default function PrestarInstrumento() {
   }
 
   if (step === 2) {
+    const dayStartMin = OPERATING_START * 60;
+    const daySpan = (OPERATING_END - OPERATING_START) * 60;
+
     return (
-      <main style={{ maxWidth: 420, margin: '60px auto 0', padding: '0 16px' }}>
-        <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 4 }}>Tipo de instrumento</h1>
+      <main style={{ maxWidth: 420, margin: '40px auto 0', padding: '0 16px' }}>
+        <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 4 }}>Elige el instrumento</h1>
         <p style={{ color: '#5B6B60', fontSize: 13, marginBottom: 16 }}>
-          ¿Qué necesitas, {name.split(' ')[0]}?
+          Estos son los instrumentos disponibles ahora mismo.
         </p>
         {error && (
           <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
             {error}
           </div>
         )}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-          {Object.keys(CATEGORY_META).map((c) => (
-            <button
-              key={c}
-              onClick={() => selectCategory(c)}
-              disabled={loading}
-              style={{ border: '1px solid #DBDCCF', borderRadius: 12, padding: 16, textAlign: 'center', background: '#fff', cursor: loading ? 'default' : 'pointer' }}
-            >
-              <div style={{ fontSize: 26, marginBottom: 6 }}>{CATEGORY_META[c].icon}</div>
-              <div style={{ fontSize: 13, fontWeight: 600 }}>{CATEGORY_META[c].label}</div>
-            </button>
-          ))}
-        </div>
-        <button onClick={() => setStep(1)} style={{ marginTop: 16, background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
-          Atrás
-        </button>
-      </main>
-    );
-  }
 
-  if (step === 3) {
-    const dayStartMin = OPERATING_START * 60;
-    const daySpan = (OPERATING_END - OPERATING_START) * 60;
-
-    return (
-      <main style={{ maxWidth: 420, margin: '40px auto 0', padding: '0 16px' }}>
-        <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 4 }}>
-          {CATEGORY_META[category]?.label}
-        </h1>
-        {error && (
-          <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
-            {error}
-          </div>
-        )}
-
-        <label style={{ fontSize: 12, color: '#5B6B60', display: 'block', marginBottom: 4 }}>Elige el instrumento</label>
+        <label style={{ fontSize: 12, color: '#5B6B60', display: 'block', marginBottom: 4 }}>Instrumento</label>
         <select value={instrumentId || ''} onChange={(e) => setInstrumentId(e.target.value)}
           style={{ width: '100%', padding: 10, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14, marginBottom: 12, boxSizing: 'border-box' }}>
           {instruments.map((i) => (
@@ -398,10 +345,10 @@ export default function PrestarInstrumento() {
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={() => setStep(2)} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
+          <button onClick={() => setStep(1)} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
             Atrás
           </button>
-          <button onClick={() => setStep(4)}
+          <button onClick={() => setStep(3)}
             style={{ flex: 1, padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
             Revisar y confirmar
           </button>
@@ -410,7 +357,7 @@ export default function PrestarInstrumento() {
     );
   }
 
-  if (step === 4) {
+  if (step === 3) {
     const selectedInstrument = instruments.find((i) => i.id === instrumentId);
     return (
       <main style={{ maxWidth: 400, margin: '60px auto 0', padding: '0 16px' }}>
@@ -434,7 +381,7 @@ export default function PrestarInstrumento() {
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={() => setStep(3)} disabled={loading} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
+          <button onClick={() => setStep(2)} disabled={loading} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
             Atrás
           </button>
           <button onClick={handleCreateLoan} disabled={loading}
@@ -446,7 +393,7 @@ export default function PrestarInstrumento() {
     );
   }
 
-  if (step === 5) {
+  if (step === 4) {
     if (bounced) {
       return (
         <main style={{ maxWidth: 400, margin: '60px auto 0', padding: '0 16px', textAlign: 'center' }}>
@@ -499,7 +446,7 @@ export default function PrestarInstrumento() {
     );
   }
 
-  // step === 6: éxito final
+  // step === 5: éxito final
   return (
     <main style={{ maxWidth: 400, margin: '60px auto 0', padding: '0 16px', textAlign: 'center' }}>
       <div style={{ fontSize: 34 }}>✅</div>
