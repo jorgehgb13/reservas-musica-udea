@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 
@@ -15,6 +15,14 @@ function toMinutes(t) {
 
 function pad2(n) {
   return String(n).padStart(2, '0');
+}
+
+function normalize(s) {
+  return String(s ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .trim();
 }
 
 // Convierte un Date a formato "YYYY-MM-DDTHH:mm" para inputs datetime-local,
@@ -79,6 +87,38 @@ function pctWidth(startTime, endTime) {
   return Math.max(0, pct);
 }
 
+const INSTRUMENT_TEMPLATE_HEADERS = ['Nombre', 'Categoria', 'Numero de inventario'];
+
+function validateInstrumentRow(row, rowNumber) {
+  const norm = {};
+  for (const key of Object.keys(row)) {
+    norm[normalize(key)] = row[key];
+  }
+  const get = (header) => {
+    const v = norm[normalize(header)];
+    return v === undefined || v === null ? '' : String(v).trim();
+  };
+
+  const name = get('Nombre');
+  const categoryRaw = get('Categoria');
+  const inventoryNumber = get('Numero de inventario');
+  const categoryKey = normalize(categoryRaw);
+
+  const errors = [];
+  if (!name) errors.push('Falta el nombre.');
+  if (!(categoryKey in CATEGORY_LABEL)) errors.push('La categoría debe ser Viento, Cuerda, Percusión o Teclado.');
+  if (!inventoryNumber) errors.push('Falta el número de inventario.');
+
+  return {
+    rowNumber,
+    name,
+    category: categoryKey in CATEGORY_LABEL ? categoryKey : null,
+    categoryLabel: CATEGORY_LABEL[categoryKey] || categoryRaw || '—',
+    inventoryNumber,
+    errors,
+  };
+}
+
 export default function AdminHome() {
   const [session, setSession] = useState(undefined);
   const router = useRouter();
@@ -131,6 +171,14 @@ export default function AdminHome() {
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editError, setEditError] = useState(null);
   const [toggleId, setToggleId] = useState(null);
+
+  const instrumentFileInputRef = useRef(null);
+  const [instrumentFileName, setInstrumentFileName] = useState(null);
+  const [instrumentParsing, setInstrumentParsing] = useState(false);
+  const [instrumentParsedRows, setInstrumentParsedRows] = useState([]);
+  const [instrumentUploadError, setInstrumentUploadError] = useState(null);
+  const [instrumentUploadProcessing, setInstrumentUploadProcessing] = useState(false);
+  const [instrumentUploadResults, setInstrumentUploadResults] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -516,6 +564,94 @@ export default function AdminHome() {
     await loadInstruments();
   }
 
+  async function handleDownloadInstrumentTemplate() {
+    const XLSX = await import('xlsx');
+    const example = ['Violín 3/4', 'Cuerda', 'INV-0042'];
+    const ws = XLSX.utils.aoa_to_sheet([INSTRUMENT_TEMPLATE_HEADERS, example]);
+    ws['!cols'] = INSTRUMENT_TEMPLATE_HEADERS.map(() => ({ wch: 22 }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Plantilla');
+    XLSX.writeFile(wb, 'plantilla-instrumentos.xlsx');
+  }
+
+  async function handleInstrumentFileChange(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setInstrumentFileName(file.name);
+    setInstrumentUploadResults(null);
+    setInstrumentUploadError(null);
+    setInstrumentParsedRows([]);
+    setInstrumentParsing(true);
+
+    try {
+      const XLSX = await import('xlsx');
+      const buffer = await file.arrayBuffer();
+      const workbook = XLSX.read(buffer, { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+      if (rawRows.length === 0) {
+        setInstrumentUploadError('El archivo no tiene filas de datos (solo encabezados, o está vacío).');
+        setInstrumentParsing(false);
+        return;
+      }
+
+      const validated = rawRows
+        .map((row, idx) => validateInstrumentRow(row, idx + 2))
+        .filter((row) => row.name || row.inventoryNumber);
+
+      setInstrumentParsedRows(validated);
+    } catch (err) {
+      console.error('[admin] error leyendo archivo de instrumentos:', err);
+      setInstrumentUploadError('No se pudo leer el archivo. Asegúrate de que sea un .xlsx válido y siga el formato de la plantilla.');
+    } finally {
+      setInstrumentParsing(false);
+    }
+  }
+
+  async function handleConfirmInstrumentUpload() {
+    const validRows = instrumentParsedRows.filter((r) => r.errors.length === 0);
+    if (validRows.length === 0) return;
+
+    setInstrumentUploadProcessing(true);
+    setInstrumentUploadResults(null);
+
+    let created = 0;
+    let skipped = 0;
+    const rowResults = [];
+
+    for (const row of validRows) {
+      const { error } = await supabase
+        .from('instruments')
+        .insert({ name: row.name, category: row.category, inventory_number: row.inventoryNumber });
+
+      if (error) {
+        skipped += 1;
+        rowResults.push({
+          rowNumber: row.rowNumber,
+          name: row.name,
+          ok: false,
+          error: error.code === '23505' ? 'Ya existe un instrumento con ese número de inventario.' : error.message,
+        });
+      } else {
+        created += 1;
+        rowResults.push({ rowNumber: row.rowNumber, name: row.name, ok: true });
+      }
+    }
+
+    setInstrumentUploadResults({ created, skipped, rowResults });
+    setInstrumentUploadProcessing(false);
+    await loadInstruments();
+  }
+
+  function handleResetInstrumentUpload() {
+    setInstrumentFileName(null);
+    setInstrumentParsedRows([]);
+    setInstrumentUploadResults(null);
+    setInstrumentUploadError(null);
+    if (instrumentFileInputRef.current) instrumentFileInputRef.current.value = '';
+  }
+
   if (session === undefined) {
     return <main style={{ padding: 40, textAlign: 'center', color: '#5B6B60' }}>Cargando…</main>;
   }
@@ -543,6 +679,9 @@ export default function AdminHome() {
     if (instrumentCategoryFilter !== 'todos' && i.category !== instrumentCategoryFilter) return false;
     return true;
   });
+
+  const instrumentValidCount = instrumentParsedRows.filter((r) => r.errors.length === 0).length;
+  const instrumentInvalidCount = instrumentParsedRows.length - instrumentValidCount;
 
   return (
     <main style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
@@ -1047,6 +1186,149 @@ export default function AdminHome() {
                 {iSubmitting ? 'Guardando...' : 'Agregar instrumento'}
               </button>
             </form>
+          </div>
+
+          <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18, marginBottom: 26 }}>
+            <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 6px' }}>O carga varios de una vez desde un Excel</h2>
+            <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 10px' }}>
+              El archivo debe tener estas columnas exactas en la primera fila:
+            </p>
+            <div style={{ fontFamily: 'monospace', fontSize: 12, background: '#fff', border: '1px solid #DBDCCF', borderRadius: 6, padding: 10, marginBottom: 10, overflowX: 'auto', whiteSpace: 'nowrap' }}>
+              {INSTRUMENT_TEMPLATE_HEADERS.join(' | ')}
+            </div>
+            <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 12px' }}>
+              <strong>Categoria</strong> debe ser Viento, Cuerda, Percusión o Teclado.
+            </p>
+
+            <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
+              <button
+                onClick={handleDownloadInstrumentTemplate}
+                style={{ padding: '8px 16px', fontSize: 13, borderRadius: 6, border: '1px solid #0B6E4F', color: '#0B6E4F', background: 'transparent', cursor: 'pointer' }}
+              >
+                Descargar plantilla
+              </button>
+              <input
+                ref={instrumentFileInputRef}
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={handleInstrumentFileChange}
+                style={{ fontSize: 13 }}
+              />
+              {instrumentFileName && (
+                <span style={{ fontSize: 12, color: '#5B6B60' }}>
+                  {instrumentParsing ? 'Leyendo…' : instrumentFileName}
+                </span>
+              )}
+            </div>
+
+            {instrumentUploadError && (
+              <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 14, fontSize: 12 }}>
+                {instrumentUploadError}
+              </div>
+            )}
+
+            {instrumentParsedRows.length > 0 && !instrumentUploadResults && (
+              <div>
+                <p style={{ fontSize: 13, color: '#5B6B60', marginBottom: 10 }}>
+                  {instrumentValidCount} fila(s) lista(s) para cargar
+                  {instrumentInvalidCount > 0 && (
+                    <> · <span style={{ color: '#A23E33' }}>{instrumentInvalidCount} fila(s) con errores (no se cargarán)</span></>
+                  )}
+                </p>
+
+                <div style={{ overflowX: 'auto', marginBottom: 12 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                    <thead>
+                      <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
+                        <th style={{ padding: 6 }}>Fila</th>
+                        <th style={{ padding: 6 }}>Nombre</th>
+                        <th style={{ padding: 6 }}>Categoría</th>
+                        <th style={{ padding: 6 }}>N° inventario</th>
+                        <th style={{ padding: 6 }}>Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {instrumentParsedRows.map((row) => (
+                        <tr key={row.rowNumber} style={{ borderBottom: '1px solid #DBDCCF' }}>
+                          <td style={{ padding: 6 }}>{row.rowNumber}</td>
+                          <td style={{ padding: 6 }}>{row.name || '—'}</td>
+                          <td style={{ padding: 6 }}>{row.categoryLabel}</td>
+                          <td style={{ padding: 6, fontFamily: 'monospace' }}>{row.inventoryNumber || '—'}</td>
+                          <td style={{ padding: 6 }}>
+                            {row.errors.length === 0 ? (
+                              <span style={{ background: '#E4F0EA', color: '#084F39', fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20 }}>
+                                Lista
+                              </span>
+                            ) : (
+                              <span style={{ background: '#F7E8E5', color: '#A23E33', fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20 }}
+                                title={row.errors.join(' ')}>
+                                Error
+                              </span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {instrumentInvalidCount > 0 && (
+                  <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                    <strong>Detalle de errores:</strong>
+                    <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+                      {instrumentParsedRows.filter((r) => r.errors.length > 0).map((r) => (
+                        <li key={r.rowNumber}>Fila {r.rowNumber}: {r.errors.join(' ')}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button
+                    onClick={handleConfirmInstrumentUpload}
+                    disabled={instrumentUploadProcessing || instrumentValidCount === 0}
+                    style={{
+                      padding: '9px 18px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #0B6E4F',
+                      background: '#0B6E4F', color: '#fff', cursor: instrumentUploadProcessing || instrumentValidCount === 0 ? 'not-allowed' : 'pointer',
+                      opacity: instrumentUploadProcessing || instrumentValidCount === 0 ? 0.6 : 1,
+                    }}
+                  >
+                    {instrumentUploadProcessing ? 'Cargando…' : `Confirmar carga (${instrumentValidCount})`}
+                  </button>
+                  <button
+                    onClick={handleResetInstrumentUpload}
+                    disabled={instrumentUploadProcessing}
+                    style={{ padding: '9px 18px', fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', background: '#fff', cursor: 'pointer' }}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {instrumentUploadResults && (
+              <div>
+                <div style={{ background: '#E4F0EA', border: '1px solid #bcd9c9', borderRadius: 6, padding: 12, marginBottom: 12, fontSize: 13, color: '#084F39' }}>
+                  {instrumentUploadResults.created} instrumento(s) agregado(s)
+                  {instrumentUploadResults.skipped > 0 && <> · {instrumentUploadResults.skipped} omitido(s)</>}
+                </div>
+                {instrumentUploadResults.skipped > 0 && (
+                  <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {instrumentUploadResults.rowResults.filter((r) => !r.ok).map((r) => (
+                        <li key={r.rowNumber}>Fila {r.rowNumber} ({r.name}): {r.error}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <button
+                  onClick={handleResetInstrumentUpload}
+                  style={{ padding: '8px 16px', fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', background: '#fff', cursor: 'pointer' }}
+                >
+                  Cargar otro archivo
+                </button>
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
