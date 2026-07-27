@@ -6,7 +6,6 @@ import { supabase } from '../../lib/supabaseClient';
 const TYPE_META = {
   cubiculo: { label: 'Cubículo', icon: '🎧', needsApproval: false },
   aula: { label: 'Aula', icon: '🎹', needsApproval: true },
-  auditorio: { label: 'Auditorio', icon: '🎭', needsApproval: true },
 };
 
 const OPERATING_START = 6;
@@ -108,10 +107,11 @@ export default function Reservar() {
     setError(null);
     setLoading(true);
     try {
+      const typesToFetch = t === 'aula' ? ['aula', 'auditorio'] : [t];
       const { data, error: fetchError } = await supabase
         .from('rooms')
         .select('id, code, name, type')
-        .eq('type', t)
+        .in('type', typesToFetch)
         .order('name', { ascending: true });
 
       if (fetchError) {
@@ -286,7 +286,7 @@ export default function Reservar() {
             {error}
           </div>
         )}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           {Object.keys(TYPE_META).map((t) => (
             <button
               key={t}
