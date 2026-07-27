@@ -75,15 +75,6 @@ const STATUS_COLOR = {
   rechazada: { bg: '#F7E8E5', fg: '#A23E33' },
 };
 
-const CATEGORY_LABEL = { viento: 'Viento', cuerda: 'Cuerda', percusion: 'Percusión', teclado: 'Teclado' };
-const CATEGORY_TABS = [
-  { key: 'todos', label: 'Todos' },
-  { key: 'viento', label: 'Viento' },
-  { key: 'cuerda', label: 'Cuerda' },
-  { key: 'percusion', label: 'Percusión' },
-  { key: 'teclado', label: 'Teclado' },
-];
-
 const ROOM_TYPE_LABEL = { cubiculo: 'Cubículos', aula: 'Aulas', auditorio: 'Auditorio' };
 const ROOM_TYPE_ORDER = ['cubiculo', 'aula', 'auditorio'];
 const OCCUPANCY_TABS = [
@@ -113,7 +104,7 @@ function pctWidth(startTime, endTime) {
   return Math.max(0, pct);
 }
 
-const INSTRUMENT_TEMPLATE_HEADERS = ['Nombre', 'Categoria', 'Numero de inventario'];
+const INSTRUMENT_TEMPLATE_HEADERS = ['Nombre', 'Numero de inventario'];
 
 function validateInstrumentRow(row, rowNumber) {
   const norm = {};
@@ -126,20 +117,15 @@ function validateInstrumentRow(row, rowNumber) {
   };
 
   const name = get('Nombre');
-  const categoryRaw = get('Categoria');
   const inventoryNumber = get('Numero de inventario');
-  const categoryKey = normalize(categoryRaw);
 
   const errors = [];
   if (!name) errors.push('Falta el nombre.');
-  if (!(categoryKey in CATEGORY_LABEL)) errors.push('La categoría debe ser Viento, Cuerda, Percusión o Teclado.');
   if (!inventoryNumber) errors.push('Falta el número de inventario.');
 
   return {
     rowNumber,
     name,
-    category: categoryKey in CATEGORY_LABEL ? categoryKey : null,
-    categoryLabel: CATEGORY_LABEL[categoryKey] || categoryRaw || '—',
     inventoryNumber,
     errors,
   };
@@ -187,11 +173,9 @@ export default function AdminHome() {
   const [instruments, setInstruments] = useState([]);
   const [instrumentsLoading, setInstrumentsLoading] = useState(false);
   const [instrumentsError, setInstrumentsError] = useState(null);
-  const [instrumentCategoryFilter, setInstrumentCategoryFilter] = useState('todos');
   const [showInactiveInstruments, setShowInactiveInstruments] = useState(false);
 
   const [iName, setIName] = useState('');
-  const [iCategory, setICategory] = useState('viento');
   const [iInventoryNumber, setIInventoryNumber] = useState('');
   const [iSubmitting, setISubmitting] = useState(false);
   const [iFormError, setIFormError] = useState(null);
@@ -199,7 +183,6 @@ export default function AdminHome() {
 
   const [editingInstrumentId, setEditingInstrumentId] = useState(null);
   const [editName, setEditName] = useState('');
-  const [editCategory, setEditCategory] = useState('viento');
   const [editInventoryNumber, setEditInventoryNumber] = useState('');
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editError, setEditError] = useState(null);
@@ -212,6 +195,13 @@ export default function AdminHome() {
   const [instrumentUploadError, setInstrumentUploadError] = useState(null);
   const [instrumentUploadProcessing, setInstrumentUploadProcessing] = useState(false);
   const [instrumentUploadResults, setInstrumentUploadResults] = useState(null);
+
+  // ---------- Préstamos de instrumentos ----------
+  const [instrumentLoansDate, setInstrumentLoansDate] = useState(todayStr());
+  const [instrumentLoans, setInstrumentLoans] = useState([]);
+  const [instrumentLoansLoading, setInstrumentLoansLoading] = useState(false);
+  const [instrumentLoansError, setInstrumentLoansError] = useState(null);
+  const [instrumentLoanActionId, setInstrumentLoanActionId] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -325,8 +315,7 @@ export default function AdminHome() {
     setInstrumentsError(null);
     const { data, error } = await supabase
       .from('instruments')
-      .select('id, name, category, inventory_number, active')
-      .order('category', { ascending: true })
+      .select('id, name, inventory_number, active')
       .order('name', { ascending: true });
 
     if (error) {
@@ -342,6 +331,30 @@ export default function AdminHome() {
   useEffect(() => {
     if (session && view === 'instrumentos') loadInstruments();
   }, [session, view, loadInstruments]);
+
+  const loadInstrumentLoans = useCallback(async () => {
+    setInstrumentLoansLoading(true);
+    setInstrumentLoansError(null);
+    const { data, error } = await supabase
+      .from('instrument_reservations')
+      .select('id, date, start_time, end_time, status, instruments ( name ), app_users ( name, email )')
+      .eq('date', instrumentLoansDate)
+      .neq('status', 'cancelada')
+      .order('start_time', { ascending: true });
+
+    if (error) {
+      console.error('[admin] error cargando préstamos:', error);
+      setInstrumentLoansError(`No se pudieron cargar los préstamos: ${error.message}`);
+      setInstrumentLoans([]);
+    } else {
+      setInstrumentLoans(data || []);
+    }
+    setInstrumentLoansLoading(false);
+  }, [instrumentLoansDate]);
+
+  useEffect(() => {
+    if (session && view === 'instrumentos') loadInstrumentLoans();
+  }, [session, view, loadInstrumentLoans]);
 
   // Cuando cambia el correo escrito, revisamos si ya existe esa persona
   // para no pedir el nombre otra vez si ya la tenemos registrada.
@@ -551,7 +564,7 @@ export default function AdminHome() {
     setISubmitting(true);
     const { error } = await supabase
       .from('instruments')
-      .insert({ name, category: iCategory, inventory_number: inventoryNumber });
+      .insert({ name, inventory_number: inventoryNumber });
 
     if (error) {
       console.error('[admin] error creando instrumento:', error);
@@ -587,10 +600,24 @@ export default function AdminHome() {
     setToggleId(null);
   }
 
+  async function handleCancelInstrumentLoan(id) {
+    setInstrumentLoanActionId(id);
+    const { error } = await supabase
+      .from('instrument_reservations')
+      .update({ status: 'cancelada' })
+      .eq('id', id);
+    if (error) {
+      console.error('[admin] error cancelando préstamo:', error);
+      setInstrumentLoansError(`No se pudo cancelar el préstamo: ${error.message}`);
+    } else {
+      await loadInstrumentLoans();
+    }
+    setInstrumentLoanActionId(null);
+  }
+
   function startEditInstrument(instrument) {
     setEditingInstrumentId(instrument.id);
     setEditName(instrument.name);
-    setEditCategory(instrument.category);
     setEditInventoryNumber(instrument.inventory_number);
     setEditError(null);
   }
@@ -611,7 +638,7 @@ export default function AdminHome() {
     setEditError(null);
     const { error } = await supabase
       .from('instruments')
-      .update({ name, category: editCategory, inventory_number: inventoryNumber })
+      .update({ name, inventory_number: inventoryNumber })
       .eq('id', id);
 
     if (error) {
@@ -689,7 +716,7 @@ export default function AdminHome() {
     for (const row of validRows) {
       const { error } = await supabase
         .from('instruments')
-        .insert({ name: row.name, category: row.category, inventory_number: row.inventoryNumber });
+        .insert({ name: row.name, inventory_number: row.inventoryNumber });
 
       if (error) {
         skipped += 1;
@@ -742,7 +769,6 @@ export default function AdminHome() {
 
   const visibleInstruments = instruments.filter((i) => {
     if (!showInactiveInstruments && !i.active) return false;
-    if (instrumentCategoryFilter !== 'todos' && i.category !== instrumentCategoryFilter) return false;
     return true;
   });
 
@@ -1206,10 +1232,81 @@ export default function AdminHome() {
       {view === 'instrumentos' && (
         <>
           <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18, marginBottom: 26 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14, flexWrap: 'wrap', gap: 10 }}>
+              <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: 0 }}>Préstamos reservados</h2>
+              <input
+                type="date"
+                value={instrumentLoansDate}
+                onChange={(e) => setInstrumentLoansDate(e.target.value)}
+                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13 }}
+              />
+            </div>
+
+            {instrumentLoansError && (
+              <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                {instrumentLoansError}
+              </div>
+            )}
+
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
+                    <th style={{ padding: 8 }}>Instrumento</th>
+                    <th style={{ padding: 8 }}>Horario</th>
+                    <th style={{ padding: 8 }}>Solicitante</th>
+                    <th style={{ padding: 8 }}>Estado</th>
+                    <th style={{ padding: 8 }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {instrumentLoans.length === 0 && !instrumentLoansLoading && (
+                    <tr>
+                      <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                        Sin préstamos reservados para esta fecha.
+                      </td>
+                    </tr>
+                  )}
+                  {instrumentLoans.map((loan) => {
+                    const colors = STATUS_COLOR[loan.status] || { bg: '#eee', fg: '#333' };
+                    return (
+                      <tr key={loan.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
+                        <td style={{ padding: 8 }}>{loan.instruments?.name || '—'}</td>
+                        <td style={{ padding: 8, fontFamily: 'monospace' }}>
+                          {loan.start_time?.slice(0, 5)}-{loan.end_time?.slice(0, 5)}
+                        </td>
+                        <td style={{ padding: 8 }}>
+                          {loan.app_users?.name || '—'}
+                          <br />
+                          <span style={{ color: '#5B6B60', fontSize: 11 }}>{loan.app_users?.email}</span>
+                        </td>
+                        <td style={{ padding: 8 }}>
+                          <span style={{ background: colors.bg, color: colors.fg, fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20 }}>
+                            {STATUS_LABEL[loan.status] || loan.status}
+                          </span>
+                        </td>
+                        <td style={{ padding: 8 }}>
+                          <button
+                            onClick={() => handleCancelInstrumentLoan(loan.id)}
+                            disabled={instrumentLoanActionId === loan.id}
+                            style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #A23E33', color: '#A23E33', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
+                          >
+                            {instrumentLoanActionId === loan.id ? '...' : 'Cancelar'}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18, marginBottom: 26 }}>
             <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 14px' }}>Agregar instrumento</h2>
 
             <form onSubmit={handleCreateInstrument}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: 12, marginBottom: 14 }}>
                 <div>
                   <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
                     Nombre
@@ -1222,20 +1319,6 @@ export default function AdminHome() {
                     required
                     style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
                   />
-                </div>
-                <div>
-                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
-                    Categoría
-                  </label>
-                  <select
-                    value={iCategory}
-                    onChange={(e) => setICategory(e.target.value)}
-                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
-                  >
-                    {Object.entries(CATEGORY_LABEL).map(([key, label]) => (
-                      <option key={key} value={key}>{label}</option>
-                    ))}
-                  </select>
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
@@ -1284,9 +1367,6 @@ export default function AdminHome() {
             <div style={{ fontFamily: 'monospace', fontSize: 12, background: '#fff', border: '1px solid #DBDCCF', borderRadius: 6, padding: 10, marginBottom: 10, overflowX: 'auto', whiteSpace: 'nowrap' }}>
               {INSTRUMENT_TEMPLATE_HEADERS.join(' | ')}
             </div>
-            <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 12px' }}>
-              <strong>Categoria</strong> debe ser Viento, Cuerda, Percusión o Teclado.
-            </p>
 
             <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', marginBottom: 14 }}>
               <button
@@ -1330,7 +1410,6 @@ export default function AdminHome() {
                       <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
                         <th style={{ padding: 6 }}>Fila</th>
                         <th style={{ padding: 6 }}>Nombre</th>
-                        <th style={{ padding: 6 }}>Categoría</th>
                         <th style={{ padding: 6 }}>N° inventario</th>
                         <th style={{ padding: 6 }}>Estado</th>
                       </tr>
@@ -1340,7 +1419,6 @@ export default function AdminHome() {
                         <tr key={row.rowNumber} style={{ borderBottom: '1px solid #DBDCCF' }}>
                           <td style={{ padding: 6 }}>{row.rowNumber}</td>
                           <td style={{ padding: 6 }}>{row.name || '—'}</td>
-                          <td style={{ padding: 6 }}>{row.categoryLabel}</td>
                           <td style={{ padding: 6, fontFamily: 'monospace' }}>{row.inventoryNumber || '—'}</td>
                           <td style={{ padding: 6 }}>
                             {row.errors.length === 0 ? (
@@ -1419,23 +1497,7 @@ export default function AdminHome() {
             )}
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-              {CATEGORY_TABS.map((t) => (
-                <button
-                  key={t.key}
-                  onClick={() => setInstrumentCategoryFilter(t.key)}
-                  style={{
-                    padding: '6px 14px', fontSize: 12, fontWeight: 600, borderRadius: 20, cursor: 'pointer',
-                    border: instrumentCategoryFilter === t.key ? '1px solid #0B6E4F' : '1px solid #DBDCCF',
-                    background: instrumentCategoryFilter === t.key ? '#0B6E4F' : '#fff',
-                    color: instrumentCategoryFilter === t.key ? '#fff' : '#16241C',
-                  }}
-                >
-                  {t.label}
-                </button>
-              ))}
-            </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#5B6B60', cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -1457,7 +1519,6 @@ export default function AdminHome() {
               <thead>
                 <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
                   <th style={{ padding: 8 }}>Nombre</th>
-                  <th style={{ padding: 8 }}>Categoría</th>
                   <th style={{ padding: 8 }}>N° inventario</th>
                   <th style={{ padding: 8 }}>Estado</th>
                   <th style={{ padding: 8 }}></th>
@@ -1466,7 +1527,7 @@ export default function AdminHome() {
               <tbody>
                 {visibleInstruments.length === 0 && !instrumentsLoading && (
                   <tr>
-                    <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                    <td colSpan={4} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
                       No hay instrumentos que coincidan con este filtro.
                     </td>
                   </tr>
@@ -1483,17 +1544,6 @@ export default function AdminHome() {
                             onChange={(e) => setEditName(e.target.value)}
                             style={{ width: '100%', padding: 6, fontSize: 12, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
                           />
-                        </td>
-                        <td style={{ padding: 8 }}>
-                          <select
-                            value={editCategory}
-                            onChange={(e) => setEditCategory(e.target.value)}
-                            style={{ width: '100%', padding: 6, fontSize: 12, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
-                          >
-                            {Object.entries(CATEGORY_LABEL).map(([key, label]) => (
-                              <option key={key} value={key}>{label}</option>
-                            ))}
-                          </select>
                         </td>
                         <td style={{ padding: 8 }}>
                           <input
@@ -1528,7 +1578,6 @@ export default function AdminHome() {
                   return (
                     <tr key={inst.id} style={{ borderBottom: '1px solid #DBDCCF', opacity: inst.active ? 1 : 0.6 }}>
                       <td style={{ padding: 8 }}>{inst.name}</td>
-                      <td style={{ padding: 8 }}>{CATEGORY_LABEL[inst.category] || inst.category}</td>
                       <td style={{ padding: 8, fontFamily: 'monospace' }}>{inst.inventory_number}</td>
                       <td style={{ padding: 8 }}>
                         <span
