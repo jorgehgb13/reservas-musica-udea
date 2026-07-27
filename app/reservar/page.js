@@ -10,7 +10,16 @@ const TYPE_META = {
 
 // Cubículos que, por excepción, también necesitan aprobación del
 // administrador (igual que un aula), aunque su tipo sea "cubiculo".
-const ROOM_CODES_REQUIRE_APPROVAL = ['25307'];
+const ROOM_CODES_REQUIRE_APPROVAL = ['25307', '25303'];
+
+// Avisos especiales que se muestran antes de poder enviar la reserva,
+// según el espacio elegido (uso exclusivo de un área específica).
+const ROOM_CODE_WARNINGS = {
+  '25205': 'Tenga en cuenta que esta aula es de uso exclusivo del área de Piano.',
+  '25206': 'Tenga en cuenta que esta aula es de uso exclusivo del área de Piano.',
+  '25307': 'Tenga en cuenta que este espacio es para uso exclusivo del área de percusión.',
+  '25303': 'Tenga en cuenta que este espacio es para uso exclusivo del área de percusión.',
+};
 
 function roomNeedsApproval(type, room) {
   return !!TYPE_META[type]?.needsApproval || ROOM_CODES_REQUIRE_APPROVAL.includes(room?.code);
@@ -366,6 +375,11 @@ export default function Reservar() {
             Tu reserva quedará en firme solo si el administrador la autoriza.
           </div>
         )}
+        {ROOM_CODE_WARNINGS[currentRoom?.code] && (
+          <div style={{ background: '#EAE4F5', border: '1px solid #d6c9ef', color: '#5B3FA0', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 14 }}>
+            {ROOM_CODE_WARNINGS[currentRoom.code]}
+          </div>
+        )}
         {error && (
           <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
             {error}
@@ -484,6 +498,11 @@ export default function Reservar() {
         {roomNeedsApproval(type, selectedRoom) && (
           <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 12 }}>
             Su reserva quedará en firme solo si el administrador la autoriza.
+          </div>
+        )}
+        {ROOM_CODE_WARNINGS[selectedRoom?.code] && (
+          <div style={{ background: '#EAE4F5', border: '1px solid #d6c9ef', color: '#5B3FA0', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 12 }}>
+            {ROOM_CODE_WARNINGS[selectedRoom.code]}
           </div>
         )}
         <div style={{ background: '#E4F0EA', border: '1px solid #bfe0cf', color: '#084F39', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 18 }}>
