@@ -20,7 +20,6 @@ export default function Cancelar() {
 
   const [reservationId, setReservationId] = useState(null);
   const [reservation, setReservation] = useState(null);
-  const [previewCode, setPreviewCode] = useState('');
 
   const [code, setCode] = useState('');
   const [confirmError, setConfirmError] = useState(null);
@@ -44,7 +43,6 @@ export default function Cancelar() {
       }
       setReservationId(data.reservationId);
       setReservation(data.reservation);
-      setPreviewCode(data.code);
       setStep(2);
     } catch (err) {
       setError('Ocurrió un error de conexión. Intenta de nuevo.');
@@ -148,14 +146,11 @@ export default function Cancelar() {
             </div>
           </div>
 
-          <div style={{ background: '#F5F4EC', border: '1px dashed #C7C9B8', borderRadius: 8, padding: 14, marginBottom: 16 }}>
-            <div style={{ fontSize: 12, color: '#5B6B60', marginBottom: 8 }}>
-              Vista previa del correo (simulado) — en producción, el código solo llegaría si el correo existe de verdad.
-            </div>
-            <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Tu código para cancelar</div>
-            <div style={{ fontFamily: 'Georgia, serif', fontSize: 28, letterSpacing: 4, color: '#0B6E4F' }}>
-              {previewCode}
-            </div>
+          <div style={{ background: '#E4F0EA', border: '1px solid #bfe0cf', color: '#084F39', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 12 }}>
+            Te enviamos un código de 6 dígitos a tu correo. Ingrésalo abajo para confirmar la cancelación.
+          </div>
+          <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 16 }}>
+            Si no lo ves en unos minutos, revisa tu carpeta de spam o correo no deseado — es probable que llegue ahí.
           </div>
 
           <label style={{ display: 'block', fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
