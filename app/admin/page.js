@@ -261,12 +261,19 @@ export default function AdminHome() {
   const loadReservations = useCallback(async () => {
     setLoadingList(true);
     setListError(null);
+
+    try {
+      await fetch('/api/reservations/expire-no-shows', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    } catch (err) {
+      // si falla, seguimos igual — no es crítico para cargar la lista
+    }
+
     const { data, error } = await supabase
       .from('reservations')
-      .select('id, room_id, date, start_time, end_time, status, checked_in_at, returned_at, rooms ( name, type ), app_users ( name, email )')
+      .select('id, room_id, date, start_time, end_time, status, checked_in_at, returned_at, auto_cancelled, cancel_reason, rooms ( name, type ), app_users ( name, email )')
       .eq('date', date)
-      .neq('status', 'cancelada')
       .neq('status', 'rechazada')
+      .or('status.neq.cancelada,cancel_reason.eq.no_asistio')
       .order('start_time', { ascending: true });
 
     if (error) {
@@ -364,7 +371,7 @@ export default function AdminHome() {
     const [reservationsRes, loansRes, sanctionsRes] = await Promise.all([
       supabase
         .from('reservations')
-        .select('id, status, date, start_time, end_time, checked_in_at, room_id, rooms ( name, type )')
+        .select('id, status, date, start_time, end_time, checked_in_at, cancel_reason, room_id, rooms ( name, type )')
         .gte('date', statsFrom)
         .lte('date', statsTo),
       supabase
@@ -1174,8 +1181,13 @@ export default function AdminHome() {
   const topRoomsMax = topRooms.length > 0 ? topRooms[0][1] : 0;
 
   const statsNow = new Date();
+  // Cuenta como "debía haber pasado" tanto las confirmadas que ya terminaron
+  // como las que el sistema canceló automáticamente por inasistencia
+  // (aunque su estado final ya no sea "confirmada").
   const completedConfirmed = statsReservations.filter(
-    (r) => r.status === 'confirmada' && new Date(`${r.date}T${r.end_time}-05:00`) < statsNow
+    (r) =>
+      (r.status === 'confirmada' && new Date(`${r.date}T${r.end_time}-05:00`) < statsNow) ||
+      (r.status === 'cancelada' && r.cancel_reason === 'no_asistio')
   );
   const noShows = completedConfirmed.filter((r) => !r.checked_in_at);
   const noShowRate = completedConfirmed.length > 0 ? Math.round((noShows.length / completedConfirmed.length) * 100) : null;
@@ -1356,7 +1368,16 @@ export default function AdminHome() {
                   const canFinish = r.status === 'confirmada' && !r.returned_at;
                   const canCancel = r.status !== 'cancelada';
                   const canApproveReject = r.status === 'pendiente';
-                  const colors = STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
+
+                  const startDt = new Date(`${r.date}T${r.start_time}-05:00`);
+                  const minutesSinceStart = (now - startDt) / 60000;
+                  const isNoShow =
+                    !r.checked_in_at &&
+                    minutesSinceStart > 20 &&
+                    (r.status === 'confirmada' || (r.status === 'cancelada' && r.cancel_reason === 'no_asistio'));
+
+                  const colors = isNoShow ? { bg: '#F7E8E5', fg: '#A23E33' } : STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
+                  const statusLabel = isNoShow ? 'No asistida' : STATUS_LABEL[r.status] || r.status;
                   return (
                     <tr key={r.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
                       <td style={{ padding: 8 }}>{r.rooms?.name || '—'}</td>
@@ -1369,8 +1390,8 @@ export default function AdminHome() {
                         <span style={{ color: '#5B6B60', fontSize: 11 }}>{r.app_users?.email}</span>
                       </td>
                       <td style={{ padding: 8 }}>
-                        <span style={{ background: colors.bg, color: colors.fg, fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20 }}>
-                          {STATUS_LABEL[r.status] || r.status}
+                        <span style={{ background: colors.bg, color: colors.fg, fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 20 }}>
+                          {statusLabel}
                         </span>
                         {r.checked_in_at && (
                           <div style={{ fontSize: 10, color: '#5B6B60', marginTop: 2 }}>asistió</div>
