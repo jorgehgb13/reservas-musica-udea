@@ -135,7 +135,7 @@ export default function AdminHome() {
   const [session, setSession] = useState(undefined);
   const router = useRouter();
 
-  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos' | 'semana'
+  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos' | 'semana' | 'estadisticas'
   const [date, setDate] = useState(todayStr());
   const [reservations, setReservations] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -152,6 +152,15 @@ export default function AdminHome() {
   const [weekReservations, setWeekReservations] = useState([]);
   const [weekLoading, setWeekLoading] = useState(false);
   const [weekError, setWeekError] = useState(null);
+
+  // ---------- Estadísticas ----------
+  const [statsFrom, setStatsFrom] = useState(addDays(todayStr(), -30));
+  const [statsTo, setStatsTo] = useState(todayStr());
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState(null);
+  const [statsReservations, setStatsReservations] = useState([]);
+  const [statsInstrumentLoans, setStatsInstrumentLoans] = useState([]);
+  const [statsActiveSanctions, setStatsActiveSanctions] = useState(0);
 
   // ---------- Sanciones ----------
   const [sanctions, setSanctions] = useState([]);
@@ -287,6 +296,48 @@ export default function AdminHome() {
   useEffect(() => {
     if (session && view === 'semana') loadWeekReservations();
   }, [session, view, loadWeekReservations]);
+
+  const loadStats = useCallback(async () => {
+    setStatsLoading(true);
+    setStatsError(null);
+
+    const [reservationsRes, loansRes, sanctionsRes] = await Promise.all([
+      supabase
+        .from('reservations')
+        .select('id, status, date, start_time, end_time, checked_in_at, room_id, rooms ( name, type )')
+        .gte('date', statsFrom)
+        .lte('date', statsTo),
+      supabase
+        .from('instrument_reservations')
+        .select('id, status, date, instrument_id, instruments ( name )')
+        .gte('date', statsFrom)
+        .lte('date', statsTo),
+      supabase
+        .from('sanctions')
+        .select('id', { count: 'exact', head: true })
+        .gt('until', new Date().toISOString()),
+    ]);
+
+    if (reservationsRes.error || loansRes.error || sanctionsRes.error) {
+      const err = reservationsRes.error || loansRes.error || sanctionsRes.error;
+      console.error('[admin] error cargando estadísticas:', err);
+      setStatsError(`No se pudieron cargar las estadísticas: ${err.message}`);
+      setStatsReservations([]);
+      setStatsInstrumentLoans([]);
+      setStatsActiveSanctions(0);
+      setStatsLoading(false);
+      return;
+    }
+
+    setStatsReservations(reservationsRes.data || []);
+    setStatsInstrumentLoans(loansRes.data || []);
+    setStatsActiveSanctions(sanctionsRes.count || 0);
+    setStatsLoading(false);
+  }, [statsFrom, statsTo]);
+
+  useEffect(() => {
+    if (session && view === 'estadisticas') loadStats();
+  }, [session, view, loadStats]);
 
   const loadSanctions = useCallback(async () => {
     setSanctionsLoading(true);
@@ -775,6 +826,50 @@ export default function AdminHome() {
   const instrumentValidCount = instrumentParsedRows.filter((r) => r.errors.length === 0).length;
   const instrumentInvalidCount = instrumentParsedRows.length - instrumentValidCount;
 
+  // ---------- Cálculos de Estadísticas ----------
+  const statsTotal = statsReservations.length;
+
+  const statsByStatus = {};
+  for (const r of statsReservations) {
+    statsByStatus[r.status] = (statsByStatus[r.status] || 0) + 1;
+  }
+
+  const statsByType = { cubiculo: 0, aula: 0, auditorio: 0 };
+  for (const r of statsReservations) {
+    const t = r.rooms?.type;
+    if (t && t in statsByType) statsByType[t] += 1;
+  }
+
+  const roomCounts = {};
+  for (const r of statsReservations) {
+    if (!['confirmada', 'pendiente', 'sin_verificar'].includes(r.status)) continue;
+    const name = r.rooms?.name || 'Espacio';
+    roomCounts[name] = (roomCounts[name] || 0) + 1;
+  }
+  const topRooms = Object.entries(roomCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  const topRoomsMax = topRooms.length > 0 ? topRooms[0][1] : 0;
+
+  const statsNow = new Date();
+  const completedConfirmed = statsReservations.filter(
+    (r) => r.status === 'confirmada' && new Date(`${r.date}T${r.end_time}-05:00`) < statsNow
+  );
+  const noShows = completedConfirmed.filter((r) => !r.checked_in_at);
+  const noShowRate = completedConfirmed.length > 0 ? Math.round((noShows.length / completedConfirmed.length) * 100) : null;
+
+  const statsInstrumentTotal = statsInstrumentLoans.length;
+  const instrumentCounts = {};
+  for (const l of statsInstrumentLoans) {
+    if (!['confirmada', 'sin_verificar'].includes(l.status)) continue;
+    const name = l.instruments?.name || 'Instrumento';
+    instrumentCounts[name] = (instrumentCounts[name] || 0) + 1;
+  }
+  const topInstruments = Object.entries(instrumentCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5);
+  const topInstrumentsMax = topInstruments.length > 0 ? topInstruments[0][1] : 0;
+
   return (
     <main style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
@@ -840,6 +935,16 @@ export default function AdminHome() {
           }}
         >
           Instrumentos
+        </button>
+        <button
+          onClick={() => setView('estadisticas')}
+          style={{
+            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
+            border: 'none', borderBottom: view === 'estadisticas' ? '2px solid #0B6E4F' : '2px solid transparent',
+            color: view === 'estadisticas' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
+          }}
+        >
+          Estadísticas
         </button>
         <a
           href="/admin/carga-masiva"
@@ -1724,6 +1829,140 @@ export default function AdminHome() {
               </div>
             </div>
           )}
+        </>
+      )}
+
+      {view === 'estadisticas' && (
+        <>
+          <div style={{ display: 'flex', gap: 16, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 24 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Desde</label>
+              <input
+                type="date"
+                value={statsFrom}
+                onChange={(e) => setStatsFrom(e.target.value)}
+                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13 }}
+              />
+            </div>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hasta</label>
+              <input
+                type="date"
+                value={statsTo}
+                onChange={(e) => setStatsTo(e.target.value)}
+                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13 }}
+              />
+            </div>
+            {statsLoading && <span style={{ fontSize: 13, color: '#5B6B60' }}>Cargando…</span>}
+          </div>
+
+          {statsError && (
+            <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 20, fontSize: 13 }}>
+              {statsError}
+            </div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, marginBottom: 28 }}>
+            <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 16 }}>
+              <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Georgia, serif' }}>{statsTotal}</div>
+              <div style={{ fontSize: 12, color: '#5B6B60' }}>Solicitudes de espacio</div>
+            </div>
+            <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 16 }}>
+              <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Georgia, serif' }}>{statsInstrumentTotal}</div>
+              <div style={{ fontSize: 12, color: '#5B6B60' }}>Préstamos de instrumentos</div>
+            </div>
+            <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 16 }}>
+              <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Georgia, serif' }}>
+                {noShowRate === null ? '—' : `${noShowRate}%`}
+              </div>
+              <div style={{ fontSize: 12, color: '#5B6B60' }}>
+                Tasa de inasistencia{noShowRate !== null && ` (${noShows.length}/${completedConfirmed.length})`}
+              </div>
+            </div>
+            <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 16 }}>
+              <div style={{ fontSize: 24, fontWeight: 700, fontFamily: 'Georgia, serif' }}>{statsActiveSanctions}</div>
+              <div style={{ fontSize: 12, color: '#5B6B60' }}>Sanciones activas hoy</div>
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, marginBottom: 28 }}>
+            <div>
+              <h3 style={{ fontFamily: 'Georgia, serif', fontSize: 15, margin: '0 0 12px' }}>Solicitudes por estado</h3>
+              {Object.keys(STATUS_LABEL).map((key) => {
+                const count = statsByStatus[key] || 0;
+                const pct = statsTotal > 0 ? (count / statsTotal) * 100 : 0;
+                const colors = STATUS_COLOR[key] || { bg: '#eee', fg: '#333' };
+                return (
+                  <div key={key} style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                      <span>{STATUS_LABEL[key]}</span>
+                      <span style={{ color: '#5B6B60' }}>{count}</span>
+                    </div>
+                    <div style={{ height: 8, background: '#F5F4EC', borderRadius: 4 }}>
+                      <div style={{ height: '100%', width: `${pct}%`, background: colors.fg, borderRadius: 4 }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div>
+              <h3 style={{ fontFamily: 'Georgia, serif', fontSize: 15, margin: '0 0 12px' }}>Solicitudes por tipo de espacio</h3>
+              {ROOM_TYPE_ORDER.map((t) => {
+                const count = statsByType[t] || 0;
+                const pct = statsTotal > 0 ? (count / statsTotal) * 100 : 0;
+                return (
+                  <div key={t} style={{ marginBottom: 10 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                      <span>{ROOM_TYPE_LABEL[t]}</span>
+                      <span style={{ color: '#5B6B60' }}>{count}</span>
+                    </div>
+                    <div style={{ height: 8, background: '#F5F4EC', borderRadius: 4 }}>
+                      <div style={{ height: '100%', width: `${pct}%`, background: '#0B6E4F', borderRadius: 4 }} />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+            <div>
+              <h3 style={{ fontFamily: 'Georgia, serif', fontSize: 15, margin: '0 0 12px' }}>Espacios más solicitados</h3>
+              {topRooms.length === 0 && (
+                <p style={{ fontSize: 13, color: '#5B6B60' }}>Sin datos en este periodo.</p>
+              )}
+              {topRooms.map(([name, count]) => (
+                <div key={name} style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                    <span>{name}</span>
+                    <span style={{ color: '#5B6B60' }}>{count}</span>
+                  </div>
+                  <div style={{ height: 8, background: '#F5F4EC', borderRadius: 4 }}>
+                    <div style={{ height: '100%', width: `${(count / topRoomsMax) * 100}%`, background: '#0B6E4F', borderRadius: 4 }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <div>
+              <h3 style={{ fontFamily: 'Georgia, serif', fontSize: 15, margin: '0 0 12px' }}>Instrumentos más solicitados</h3>
+              {topInstruments.length === 0 && (
+                <p style={{ fontSize: 13, color: '#5B6B60' }}>Sin datos en este periodo.</p>
+              )}
+              {topInstruments.map(([name, count]) => (
+                <div key={name} style={{ marginBottom: 10 }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, marginBottom: 3 }}>
+                    <span>{name}</span>
+                    <span style={{ color: '#5B6B60' }}>{count}</span>
+                  </div>
+                  <div style={{ height: 8, background: '#F5F4EC', borderRadius: 4 }}>
+                    <div style={{ height: '100%', width: `${(count / topInstrumentsMax) * 100}%`, background: '#5B3FA0', borderRadius: 4 }} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </>
       )}
     </main>
