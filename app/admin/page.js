@@ -8,6 +8,32 @@ function todayStr() {
   return new Date().toISOString().slice(0, 10);
 }
 
+const WEEKDAY_LABEL = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+
+// Dada una fecha (YYYY-MM-DD), devuelve el lunes y el domingo de esa misma
+// semana, usando siempre la hora de Colombia (-05:00).
+function getWeekRange(dateStr) {
+  const d = new Date(`${dateStr}T00:00:00-05:00`);
+  const dayNum = d.getUTCDay(); // 0 = domingo, 1 = lunes, ... 6 = sábado
+  const diffToMonday = dayNum === 0 ? -6 : 1 - dayNum;
+  const monday = new Date(d.getTime() + diffToMonday * 24 * 60 * 60 * 1000);
+  const dates = [];
+  for (let i = 0; i < 7; i++) {
+    dates.push(new Date(monday.getTime() + i * 24 * 60 * 60 * 1000).toISOString().slice(0, 10));
+  }
+  return dates; // [lunes, martes, ..., domingo]
+}
+
+function addDays(dateStr, n) {
+  const d = new Date(`${dateStr}T00:00:00-05:00`);
+  return new Date(d.getTime() + n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function formatDayShort(dateStr) {
+  const [, m, d] = dateStr.split('-');
+  return `${d}/${m}`;
+}
+
 function toMinutes(t) {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
@@ -123,7 +149,7 @@ export default function AdminHome() {
   const [session, setSession] = useState(undefined);
   const router = useRouter();
 
-  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos'
+  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos' | 'semana'
   const [date, setDate] = useState(todayStr());
   const [reservations, setReservations] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -133,6 +159,13 @@ export default function AdminHome() {
   const [rooms, setRooms] = useState([]);
   const [roomsError, setRoomsError] = useState(null);
   const [occupancyType, setOccupancyType] = useState('todos');
+
+  // ---------- Por semana ----------
+  const [weekRoomId, setWeekRoomId] = useState('');
+  const [weekAnchorDate, setWeekAnchorDate] = useState(todayStr());
+  const [weekReservations, setWeekReservations] = useState([]);
+  const [weekLoading, setWeekLoading] = useState(false);
+  const [weekError, setWeekError] = useState(null);
 
   // ---------- Sanciones ----------
   const [sanctions, setSanctions] = useState([]);
@@ -231,6 +264,39 @@ export default function AdminHome() {
         }
       });
   }, [session]);
+
+  const loadWeekReservations = useCallback(async () => {
+    if (!weekRoomId) {
+      setWeekReservations([]);
+      return;
+    }
+    setWeekLoading(true);
+    setWeekError(null);
+
+    const weekDates = getWeekRange(weekAnchorDate);
+    const { data, error } = await supabase
+      .from('reservations')
+      .select('id, date, start_time, end_time, status, app_users ( name, email )')
+      .eq('room_id', weekRoomId)
+      .gte('date', weekDates[0])
+      .lte('date', weekDates[6])
+      .neq('status', 'cancelada')
+      .neq('status', 'rechazada')
+      .order('start_time', { ascending: true });
+
+    if (error) {
+      console.error('[admin] error cargando reservas de la semana:', error);
+      setWeekError(`No se pudieron cargar las reservas: ${error.message}`);
+      setWeekReservations([]);
+    } else {
+      setWeekReservations(data || []);
+    }
+    setWeekLoading(false);
+  }, [weekRoomId, weekAnchorDate]);
+
+  useEffect(() => {
+    if (session && view === 'semana') loadWeekReservations();
+  }, [session, view, loadWeekReservations]);
 
   const loadSanctions = useCallback(async () => {
     setSanctionsLoading(true);
@@ -720,6 +786,16 @@ export default function AdminHome() {
           Ocupación
         </button>
         <button
+          onClick={() => setView('semana')}
+          style={{
+            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
+            border: 'none', borderBottom: view === 'semana' ? '2px solid #0B6E4F' : '2px solid transparent',
+            color: view === 'semana' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
+          }}
+        >
+          Por semana
+        </button>
+        <button
           onClick={() => setView('sanciones')}
           style={{
             padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
@@ -916,9 +992,21 @@ export default function AdminHome() {
                     const roomReservations = reservationsByRoom[room.id] || [];
                     return (
                       <div key={room.id} style={{ display: 'flex', alignItems: 'center', marginBottom: 6 }}>
-                        <div style={{ width: 130, flexShrink: 0, fontSize: 12, paddingRight: 8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <button
+                          onClick={() => {
+                            setWeekRoomId(room.id);
+                            setWeekAnchorDate(date);
+                            setView('semana');
+                          }}
+                          style={{
+                            width: 130, flexShrink: 0, fontSize: 12, paddingRight: 8, overflow: 'hidden', textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap', textAlign: 'left', background: 'transparent', border: 'none', padding: 0,
+                            color: '#0B6E4F', textDecoration: 'underline', cursor: 'pointer',
+                          }}
+                          title="Ver ocupación semanal de este espacio"
+                        >
                           {room.name}
-                        </div>
+                        </button>
                         <div style={{ flex: 1, position: 'relative', height: 26, background: '#F5F4EC', borderRadius: 4 }}>
                           {roomReservations.map((r) => {
                             const colors = STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
@@ -1478,6 +1566,115 @@ export default function AdminHome() {
               </tbody>
             </table>
           </div>
+        </>
+      )}
+
+      {view === 'semana' && (
+        <>
+          <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 16 }}>
+            <div>
+              <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Espacio</label>
+              <select
+                value={weekRoomId}
+                onChange={(e) => setWeekRoomId(e.target.value)}
+                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13, minWidth: 220 }}
+              >
+                <option value="">Selecciona un espacio…</option>
+                {ROOM_TYPE_ORDER.map((t) => {
+                  const roomsOfType = rooms.filter((r) => r.type === t);
+                  if (roomsOfType.length === 0) return null;
+                  return (
+                    <optgroup key={t} label={ROOM_TYPE_LABEL[t]}>
+                      {roomsOfType.map((r) => (
+                        <option key={r.id} value={r.id}>{r.name}</option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <button
+                onClick={() => setWeekAnchorDate((d) => addDays(d, -7))}
+                style={{ padding: '8px 12px', fontSize: 13, borderRadius: 8, border: '1px solid #DBDCCF', background: '#fff', cursor: 'pointer' }}
+              >
+                ← Semana anterior
+              </button>
+              <input
+                type="date"
+                value={weekAnchorDate}
+                onChange={(e) => setWeekAnchorDate(e.target.value)}
+                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13 }}
+              />
+              <button
+                onClick={() => setWeekAnchorDate((d) => addDays(d, 7))}
+                style={{ padding: '8px 12px', fontSize: 13, borderRadius: 8, border: '1px solid #DBDCCF', background: '#fff', cursor: 'pointer' }}
+              >
+                Semana siguiente →
+              </button>
+            </div>
+          </div>
+
+          {weekError && (
+            <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+              {weekError}
+            </div>
+          )}
+
+          {!weekRoomId && (
+            <p style={{ color: '#5B6B60', fontSize: 13 }}>Elige un espacio arriba para ver su ocupación de la semana.</p>
+          )}
+
+          {weekRoomId && (
+            <div style={{ overflowX: 'auto' }}>
+              <div style={{ display: 'flex', gap: 8, minWidth: 900 }}>
+                {getWeekRange(weekAnchorDate).map((dayDate) => {
+                  const dayReservations = weekReservations.filter((r) => r.date === dayDate);
+                  const isToday = dayDate === todayStr();
+                  const weekdayIndex = getWeekRange(weekAnchorDate).indexOf(dayDate);
+                  return (
+                    <div
+                      key={dayDate}
+                      style={{
+                        flex: 1, minWidth: 120, border: '1px solid #DBDCCF', borderRadius: 8,
+                        background: isToday ? '#FBFAF3' : '#fff', padding: 8,
+                      }}
+                    >
+                      <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{WEEKDAY_LABEL[weekdayIndex]}</div>
+                      <div style={{ fontSize: 11, color: '#5B6B60', marginBottom: 8 }}>{formatDayShort(dayDate)}</div>
+
+                      {weekLoading && <div style={{ fontSize: 11, color: '#5B6B60' }}>…</div>}
+
+                      {!weekLoading && dayReservations.length === 0 && (
+                        <div style={{ fontSize: 11, color: '#5B6B60' }}>Libre</div>
+                      )}
+
+                      {dayReservations.map((r) => {
+                        const colors = STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
+                        return (
+                          <div
+                            key={r.id}
+                            style={{
+                              background: colors.bg, color: colors.fg, borderRadius: 6, padding: '4px 6px',
+                              marginBottom: 6, fontSize: 11,
+                            }}
+                          >
+                            <div style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                              {r.start_time?.slice(0, 5)}-{r.end_time?.slice(0, 5)}
+                            </div>
+                            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                              {r.app_users?.name || '—'}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </>
       )}
     </main>
