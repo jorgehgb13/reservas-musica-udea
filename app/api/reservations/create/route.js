@@ -11,7 +11,7 @@ import { sendEmail, verificationEmailHtml } from '../../../../lib/email';
 const TYPE_APPROVAL = { cubiculo: false, aula: true, auditorio: true };
 // Cubículos que, por excepción, también necesitan aprobación del
 // administrador (igual que un aula), aunque su tipo sea "cubiculo".
-const ROOM_CODES_REQUIRE_APPROVAL = ['25307'];
+const ROOM_CODES_REQUIRE_APPROVAL = ['25307', '25303'];
 
 function generateCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
