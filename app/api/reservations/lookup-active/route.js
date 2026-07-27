@@ -8,6 +8,7 @@
 
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
+import { sendEmail, cancelEmailHtml } from '../../../../lib/email';
 
 const EMAIL_REGEX = /^[^\s@]+@udea\.edu\.co$/i;
 
@@ -78,6 +79,25 @@ export async function POST(request) {
     const code = generateCode();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
+    const emailResult = await sendEmail({
+      to: email,
+      subject: 'Tu código para cancelar tu reserva — Reservas Música UdeA',
+      html: cancelEmailHtml({
+        code,
+        roomName: active.rooms?.name || 'el espacio',
+        date: active.date,
+        start: active.start_time?.slice(0, 5),
+        end: active.end_time?.slice(0, 5),
+      }),
+    });
+
+    if (!emailResult.ok) {
+      return NextResponse.json(
+        { ok: false, message: 'No pudimos enviarte el correo con el código. Intenta de nuevo en unos minutos.' },
+        { status: 502 }
+      );
+    }
+
     const { error: updateError } = await supabaseAdmin
       .from('reservations')
       .update({ verification_code: code, verification_expires_at: expiresAt })
@@ -91,7 +111,6 @@ export async function POST(request) {
     return NextResponse.json({
       ok: true,
       reservationId: active.id,
-      code,
       expiresAt,
       reservation: {
         roomName: active.rooms?.name || 'Espacio',
