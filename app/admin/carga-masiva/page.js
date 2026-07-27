@@ -8,6 +8,15 @@ const EMAIL_REGEX = /^[^\s@]+@udea\.edu\.co$/i;
 const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
+// La hora en el Excel es solo el número (7, 9, 14...), siempre en punto.
+// Esto la convierte al formato "HH:00" que usa el resto del sistema.
+function parseHour(raw) {
+  if (raw === '' || raw === null || raw === undefined) return null;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0 || n > 23) return null;
+  return `${pad2(n)}:00`;
+}
+
 // Miércoles se marca con "W" (para no confundirlo con "M" de martes).
 // Se acepta "X" también, por si algún archivo viejo lo sigue usando.
 const DAY_MAP = {
@@ -90,8 +99,10 @@ function validateRow(row, rowNumber, roomsByCode) {
   const correo = get('Correo').toLowerCase();
   const dia1Raw = get('Dia 1');
   const dia2Raw = get('Dia 2');
-  const horaInicio = get('Horario inicio');
-  const horaFin = get('Horario fin');
+  const horaInicioRaw = get('Horario inicio');
+  const horaFinRaw = get('Horario fin');
+  const horaInicio = parseHour(horaInicioRaw);
+  const horaFin = parseHour(horaFinRaw);
   const fechaInicio = toDateStr(norm[normalize('Fecha inicio')]);
   const fechaFin = toDateStr(norm[normalize('Fecha fin')]);
 
@@ -111,9 +122,9 @@ function validateRow(row, rowNumber, roomsByCode) {
   if (dia2Raw && day2 === null) errors.push('"Dia 2" no se pudo interpretar (usa L, M, W, J, V, S o D).');
   const days = Array.from(new Set([day1, day2].filter((d) => d !== null && d !== undefined))).sort();
 
-  if (!TIME_REGEX.test(horaInicio)) errors.push('Horario de inicio inválido (usa HH:MM, ej. 14:00).');
-  if (!TIME_REGEX.test(horaFin)) errors.push('Horario de fin inválido (usa HH:MM, ej. 16:00).');
-  if (TIME_REGEX.test(horaInicio) && TIME_REGEX.test(horaFin) && horaFin <= horaInicio) {
+  if (horaInicio === null) errors.push('Horario de inicio inválido (escribe solo la hora, ej. 14 para las 2pm).');
+  if (horaFin === null) errors.push('Horario de fin inválido (escribe solo la hora, ej. 16 para las 4pm).');
+  if (horaInicio !== null && horaFin !== null && horaFin <= horaInicio) {
     errors.push('El horario de fin debe ser después del horario de inicio.');
   }
 
@@ -182,7 +193,7 @@ export default function CargaMasiva() {
 
   async function handleDownloadTemplate() {
     const XLSX = await import('xlsx');
-    const example = ['Armonía I', 'L', 'W', '14:00', '16:00', '25214', 'Prof. Juan Pérez', 'juan.perez@udea.edu.co', '2026-08-03', '2026-11-28'];
+    const example = ['Armonía I', 'L', 'W', '14', '16', '25214', 'Prof. Juan Pérez', 'juan.perez@udea.edu.co', '2026-08-03', '2026-11-28'];
     const ws = XLSX.utils.aoa_to_sheet([EXPECTED_HEADERS, example]);
     ws['!cols'] = EXPECTED_HEADERS.map(() => ({ wch: 18 }));
     const wb = XLSX.utils.book_new();
@@ -366,7 +377,7 @@ export default function CargaMasiva() {
         <ul style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 12px', paddingLeft: 18 }}>
           <li><strong>Aula</strong>: el código exacto del cubículo, aula o auditorio (ej. 25214).</li>
           <li><strong>Dia 1 / Dia 2</strong>: una letra por columna — L, M, W, J, V, S, D (W = miércoles). "Dia 2" es opcional si el curso solo es un día a la semana.</li>
-          <li><strong>Horario inicio / Horario fin</strong>: formato 24 horas, ej. 14:00.</li>
+          <li><strong>Horario inicio / Horario fin</strong>: solo el número de la hora, en punto (ej. 7, 9, 14). No se admiten minutos.</li>
           <li><strong>Fecha inicio / Fecha fin</strong>: formato AAAA-MM-DD, ej. 2026-08-03.</li>
         </ul>
         <button
