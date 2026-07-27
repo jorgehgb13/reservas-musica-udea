@@ -666,6 +666,46 @@ export default function AdminHome() {
     setInstrumentLoanActionId(null);
   }
 
+  async function handleDownloadStats() {
+    const XLSX = await import('xlsx');
+    const wb = XLSX.utils.book_new();
+
+    const resumenRows = [
+      ['Periodo', `${statsFrom} a ${statsTo}`],
+      ['Solicitudes de espacio', statsTotal],
+      ['Préstamos de instrumentos', statsInstrumentTotal],
+      ['Tasa de inasistencia', noShowRate === null ? 'Sin datos' : `${noShowRate}% (${noShows.length} de ${completedConfirmed.length})`],
+      ['Sanciones activas hoy', statsActiveSanctions],
+    ];
+    const wsResumen = XLSX.utils.aoa_to_sheet(resumenRows);
+    wsResumen['!cols'] = [{ wch: 26 }, { wch: 20 }];
+    XLSX.utils.book_append_sheet(wb, wsResumen, 'Resumen');
+
+    const estadoRows = [
+      ['Estado', 'Cantidad'],
+      ...Object.keys(STATUS_LABEL).map((k) => [STATUS_LABEL[k], statsByStatus[k] || 0]),
+    ];
+    const wsEstado = XLSX.utils.aoa_to_sheet(estadoRows);
+    XLSX.utils.book_append_sheet(wb, wsEstado, 'Por estado');
+
+    const tipoRows = [
+      ['Tipo de espacio', 'Cantidad'],
+      ...ROOM_TYPE_ORDER.map((t) => [ROOM_TYPE_LABEL[t], statsByType[t] || 0]),
+    ];
+    const wsTipo = XLSX.utils.aoa_to_sheet(tipoRows);
+    XLSX.utils.book_append_sheet(wb, wsTipo, 'Por tipo de espacio');
+
+    const roomsRows = [['Espacio', 'Solicitudes'], ...topRooms.map(([name, count]) => [name, count])];
+    const wsRooms = XLSX.utils.aoa_to_sheet(roomsRows);
+    XLSX.utils.book_append_sheet(wb, wsRooms, 'Espacios mas solicitados');
+
+    const instrRows = [['Instrumento', 'Préstamos'], ...topInstruments.map(([name, count]) => [name, count])];
+    const wsInstr = XLSX.utils.aoa_to_sheet(instrRows);
+    XLSX.utils.book_append_sheet(wb, wsInstr, 'Instrumentos mas solicitados');
+
+    XLSX.writeFile(wb, `estadisticas-${statsFrom}-a-${statsTo}.xlsx`);
+  }
+
   function startEditInstrument(instrument) {
     setEditingInstrumentId(instrument.id);
     setEditName(instrument.name);
@@ -1853,6 +1893,17 @@ export default function AdminHome() {
                 style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13 }}
               />
             </div>
+            <button
+              onClick={handleDownloadStats}
+              disabled={statsLoading || statsTotal + statsInstrumentTotal === 0}
+              style={{
+                padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: 8, border: '1px solid #0B6E4F',
+                color: '#0B6E4F', background: 'transparent', cursor: 'pointer',
+                opacity: statsLoading || statsTotal + statsInstrumentTotal === 0 ? 0.5 : 1,
+              }}
+            >
+              Descargar Excel
+            </button>
             {statsLoading && <span style={{ fontSize: 13, color: '#5B6B60' }}>Cargando…</span>}
           </div>
 
