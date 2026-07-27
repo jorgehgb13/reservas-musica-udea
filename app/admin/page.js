@@ -123,7 +123,7 @@ export default function AdminHome() {
   const [session, setSession] = useState(undefined);
   const router = useRouter();
 
-  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos' | 'llaves'
+  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos'
   const [date, setDate] = useState(todayStr());
   const [reservations, setReservations] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -179,13 +179,6 @@ export default function AdminHome() {
   const [instrumentUploadError, setInstrumentUploadError] = useState(null);
   const [instrumentUploadProcessing, setInstrumentUploadProcessing] = useState(false);
   const [instrumentUploadResults, setInstrumentUploadResults] = useState(null);
-
-  // ---------- Llaves (entrega/devolución) ----------
-  const [keyTemplates, setKeyTemplates] = useState([]);
-  const [keySessionsByTemplate, setKeySessionsByTemplate] = useState({});
-  const [keyLoading, setKeyLoading] = useState(false);
-  const [keyError, setKeyError] = useState(null);
-  const [keyActionId, setKeyActionId] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -283,66 +276,6 @@ export default function AdminHome() {
   useEffect(() => {
     if (session && view === 'instrumentos') loadInstruments();
   }, [session, view, loadInstruments]);
-
-  const loadKeyTemplates = useCallback(async () => {
-    setKeyLoading(true);
-    setKeyError(null);
-
-    const dayNum = new Date(`${date}T00:00:00-05:00`).getUTCDay();
-
-    const { data: templates, error: templatesError } = await supabase
-      .from('recurring_templates')
-      .select('id, materia, docente, start_time, end_time, date_from, date_to, days_of_week, cancelled_dates, rooms ( name )')
-      .lte('date_from', date)
-      .gte('date_to', date)
-      .contains('days_of_week', [dayNum])
-      .order('start_time', { ascending: true });
-
-    if (templatesError) {
-      console.error('[admin] error cargando materias recurrentes:', templatesError);
-      setKeyError(`No se pudieron cargar las materias del día: ${templatesError.message}`);
-      setKeyTemplates([]);
-      setKeySessionsByTemplate({});
-      setKeyLoading(false);
-      return;
-    }
-
-    const activeToday = (templates || []).filter((t) => !(t.cancelled_dates || []).includes(date));
-    setKeyTemplates(activeToday);
-
-    const templateIds = activeToday.map((t) => t.id);
-    if (templateIds.length === 0) {
-      setKeySessionsByTemplate({});
-      setKeyLoading(false);
-      return;
-    }
-
-    const { data: sessions, error: sessionsError } = await supabase
-      .from('key_sessions')
-      .select('id, template_id, key_out_at, key_in_at')
-      .eq('session_date', date)
-      .in('template_id', templateIds)
-      .order('created_at', { ascending: false });
-
-    if (sessionsError) {
-      console.error('[admin] error cargando sesiones de llave:', sessionsError);
-      setKeyError(`No se pudieron cargar las entregas de llave: ${sessionsError.message}`);
-      setKeySessionsByTemplate({});
-      setKeyLoading(false);
-      return;
-    }
-
-    const map = {};
-    for (const s of sessions || []) {
-      if (!(s.template_id in map)) map[s.template_id] = s; // el más reciente por plantilla
-    }
-    setKeySessionsByTemplate(map);
-    setKeyLoading(false);
-  }, [date]);
-
-  useEffect(() => {
-    if (session && view === 'llaves') loadKeyTemplates();
-  }, [session, view, date, loadKeyTemplates]);
 
   // Cuando cambia el correo escrito, revisamos si ya existe esa persona
   // para no pedir el nombre otra vez si ya la tenemos registrada.
@@ -719,51 +652,6 @@ export default function AdminHome() {
     if (instrumentFileInputRef.current) instrumentFileInputRef.current.value = '';
   }
 
-  async function handleCheckOutKey(templateId) {
-    setKeyActionId(templateId);
-    const { error } = await supabase
-      .from('key_sessions')
-      .insert({ template_id: templateId, session_date: date, key_out_at: new Date().toISOString() });
-    if (error) {
-      console.error('[admin] error entregando llave:', error);
-      setKeyError(`No se pudo registrar la entrega: ${error.message}`);
-    } else {
-      await loadKeyTemplates();
-    }
-    setKeyActionId(null);
-  }
-
-  async function handleCheckInKey(sessionId, templateId) {
-    setKeyActionId(templateId);
-    const { error } = await supabase
-      .from('key_sessions')
-      .update({ key_in_at: new Date().toISOString() })
-      .eq('id', sessionId);
-    if (error) {
-      console.error('[admin] error registrando devolución:', error);
-      setKeyError(`No se pudo registrar la devolución: ${error.message}`);
-    } else {
-      await loadKeyTemplates();
-    }
-    setKeyActionId(null);
-  }
-
-  async function handleCancelToday(template) {
-    setKeyActionId(template.id);
-    const newCancelled = [...(template.cancelled_dates || []), date];
-    const { error } = await supabase
-      .from('recurring_templates')
-      .update({ cancelled_dates: newCancelled })
-      .eq('id', template.id);
-    if (error) {
-      console.error('[admin] error cancelando la clase del día:', error);
-      setKeyError(`No se pudo cancelar la clase de hoy: ${error.message}`);
-    } else {
-      await loadKeyTemplates();
-    }
-    setKeyActionId(null);
-  }
-
   if (session === undefined) {
     return <main style={{ padding: 40, textAlign: 'center', color: '#5B6B60' }}>Cargando…</main>;
   }
@@ -851,16 +739,6 @@ export default function AdminHome() {
         >
           Instrumentos
         </button>
-        <button
-          onClick={() => setView('llaves')}
-          style={{
-            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
-            border: 'none', borderBottom: view === 'llaves' ? '2px solid #0B6E4F' : '2px solid transparent',
-            color: view === 'llaves' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
-          }}
-        >
-          Llaves
-        </button>
         <a
           href="/admin/carga-masiva"
           style={{
@@ -872,7 +750,7 @@ export default function AdminHome() {
         </a>
       </div>
 
-      {(view === 'lista' || view === 'ocupacion' || view === 'llaves') && (
+      {(view === 'lista' || view === 'ocupacion') && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
             style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14 }} />
@@ -1593,108 +1471,6 @@ export default function AdminHome() {
                         >
                           {toggleId === inst.id ? '...' : inst.active ? 'Desactivar' : 'Activar'}
                         </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-
-      {view === 'llaves' && (
-        <>
-          <p style={{ fontSize: 13, color: '#5B6B60', marginBottom: 16 }}>
-            Materias recurrentes que tienen clase este día, según su horario fijo.
-          </p>
-
-          {keyError && (
-            <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
-              {keyError}
-            </div>
-          )}
-
-          {keyLoading && (
-            <p style={{ color: '#5B6B60', fontSize: 13 }}>Cargando…</p>
-          )}
-
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
-                  <th style={{ padding: 8 }}>Aula</th>
-                  <th style={{ padding: 8 }}>Curso</th>
-                  <th style={{ padding: 8 }}>Docente</th>
-                  <th style={{ padding: 8 }}>Horario</th>
-                  <th style={{ padding: 8 }}>Estado de la llave</th>
-                  <th style={{ padding: 8 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {keyTemplates.length === 0 && !keyLoading && (
-                  <tr>
-                    <td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
-                      Ninguna materia recurrente tiene clase este día.
-                    </td>
-                  </tr>
-                )}
-                {keyTemplates.map((t) => {
-                  const session = keySessionsByTemplate[t.id];
-                  const isBusy = keyActionId === t.id;
-                  return (
-                    <tr key={t.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
-                      <td style={{ padding: 8 }}>{t.rooms?.name || '—'}</td>
-                      <td style={{ padding: 8 }}>{t.materia}</td>
-                      <td style={{ padding: 8 }}>{t.docente || '—'}</td>
-                      <td style={{ padding: 8, fontFamily: 'monospace' }}>
-                        {t.start_time?.slice(0, 5)}-{t.end_time?.slice(0, 5)}
-                      </td>
-                      <td style={{ padding: 8 }}>
-                        {!session && (
-                          <span style={{ background: '#FBF1D6', color: '#6b5510', fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20 }}>
-                            Sin entregar
-                          </span>
-                        )}
-                        {session && !session.key_in_at && (
-                          <span style={{ background: '#EAE4F5', color: '#5B3FA0', fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20 }}>
-                            Entregada a las {new Date(session.key_out_at).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        )}
-                        {session && session.key_in_at && (
-                          <span style={{ background: '#E4F0EA', color: '#084F39', fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20 }}>
-                            Devuelta a las {new Date(session.key_in_at).toLocaleString('es-CO', { timeZone: 'America/Bogota', hour: '2-digit', minute: '2-digit' })}
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ padding: 8, whiteSpace: 'nowrap' }}>
-                        {!session && (
-                          <>
-                            <button
-                              onClick={() => handleCheckOutKey(t.id)}
-                              disabled={isBusy}
-                              style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #0B6E4F', color: '#0B6E4F', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}
-                            >
-                              {isBusy ? '...' : 'Entregar llave'}
-                            </button>
-                            <button
-                              onClick={() => handleCancelToday(t)}
-                              disabled={isBusy}
-                              style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #A23E33', color: '#A23E33', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
-                            >
-                              No hay clase hoy
-                            </button>
-                          </>
-                        )}
-                        {session && !session.key_in_at && (
-                          <button
-                            onClick={() => handleCheckInKey(session.id, t.id)}
-                            disabled={isBusy}
-                            style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #16241C', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
-                          >
-                            {isBusy ? '...' : 'Registrar devolución'}
-                          </button>
-                        )}
                       </td>
                     </tr>
                   );
