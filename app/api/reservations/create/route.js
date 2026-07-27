@@ -9,6 +9,9 @@ import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
 import { sendEmail, verificationEmailHtml } from '../../../../lib/email';
 
 const TYPE_APPROVAL = { cubiculo: false, aula: true, auditorio: true };
+// Cubículos que, por excepción, también necesitan aprobación del
+// administrador (igual que un aula), aunque su tipo sea "cubiculo".
+const ROOM_CODES_REQUIRE_APPROVAL = ['25307'];
 
 function generateCode() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -27,15 +30,26 @@ export async function POST(request) {
     return NextResponse.json({ ok: false, message: 'Solicitud inválida.' }, { status: 400 });
   }
 
-  const { userId, roomId, roomType, date, start, end } = body || {};
+  const { userId, roomId, date, start, end } = body || {};
 
   if (!userId || !roomId || !date || !start || !end) {
     return NextResponse.json({ ok: false, message: 'Faltan datos para crear la reserva.' }, { status: 400 });
   }
 
-  const requiresApproval = !!TYPE_APPROVAL[roomType];
-
   try {
+    const { data: room, error: roomError } = await supabaseAdmin
+      .from('rooms')
+      .select('code, type')
+      .eq('id', roomId)
+      .maybeSingle();
+
+    if (roomError || !room) {
+      console.error('[reservations/create] error buscando espacio:', roomError);
+      return NextResponse.json({ ok: false, message: 'No se pudo verificar el espacio. Intenta de nuevo.' }, { status: 500 });
+    }
+
+    const requiresApproval = !!TYPE_APPROVAL[room.type] || ROOM_CODES_REQUIRE_APPROVAL.includes(room.code);
+
     const { data: activeSanctions, error: sanctionError } = await supabaseAdmin
       .from('sanctions')
       .select('reason, until')
