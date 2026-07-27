@@ -8,18 +8,20 @@ const EMAIL_REGEX = /^[^\s@]+@udea\.edu\.co$/i;
 const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}$/;
 
+// Miércoles se marca con "W" (para no confundirlo con "M" de martes).
+// Se acepta "X" también, por si algún archivo viejo lo sigue usando.
 const DAY_MAP = {
   D: 0, DOM: 0,
   L: 1, LUN: 1,
   M: 2, MAR: 2,
-  X: 3, MIE: 3,
+  W: 3, MIE: 3, X: 3,
   J: 4, JUE: 4,
   V: 5, VIE: 5,
   S: 6, SAB: 6,
 };
 const DAY_NAME = { 0: 'domingo', 1: 'lunes', 2: 'martes', 3: 'miércoles', 4: 'jueves', 5: 'viernes', 6: 'sábado' };
 
-const EXPECTED_HEADERS = ['Espacio', 'Materia', 'Docente', 'Correo docente', 'Dias', 'Hora inicio', 'Hora fin', 'Fecha inicio', 'Fecha fin'];
+const EXPECTED_HEADERS = ['Curso', 'Dia 1', 'Dia 2', 'Horario inicio', 'Horario fin', 'Aula', 'Docente', 'Correo', 'Fecha inicio', 'Fecha fin'];
 
 function pad2(n) {
   return String(n).padStart(2, '0');
@@ -40,24 +42,18 @@ function toDateStr(val) {
   return String(val ?? '').trim();
 }
 
-function parseDays(raw) {
-  if (!raw) return [];
-  const tokens = String(raw).split(/[,\s/]+/).map((t) => t.trim()).filter(Boolean);
-  const days = new Set();
-  for (const t of tokens) {
-    if (/^[0-6]$/.test(t)) {
-      days.add(Number(t));
-      continue;
-    }
-    const key = t
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .toUpperCase();
-    if (key in DAY_MAP) days.add(DAY_MAP[key]);
-    else if (key.slice(0, 3) in DAY_MAP) days.add(DAY_MAP[key.slice(0, 3)]);
-    else if (key.slice(0, 1) in DAY_MAP) days.add(DAY_MAP[key.slice(0, 1)]);
-  }
-  return Array.from(days).sort();
+function parseDay(raw) {
+  if (!raw) return null;
+  const t = String(raw).trim();
+  if (/^[0-6]$/.test(t)) return Number(t);
+  const key = t
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+  if (key in DAY_MAP) return DAY_MAP[key];
+  if (key.slice(0, 3) in DAY_MAP) return DAY_MAP[key.slice(0, 3)];
+  if (key.slice(0, 1) in DAY_MAP) return DAY_MAP[key.slice(0, 1)];
+  return null;
 }
 
 // Calcula todas las fechas concretas entre dos fechas (incluidas) que caen en
@@ -88,33 +84,37 @@ function validateRow(row, rowNumber, roomsByCode) {
     return v === undefined || v === null ? '' : String(v).trim();
   };
 
-  const roomCode = get('Espacio');
-  const materia = get('Materia');
+  const roomCode = get('Aula');
+  const materia = get('Curso');
   const docente = get('Docente');
-  const correo = get('Correo docente').toLowerCase();
-  const diasRaw = get('Dias');
-  const horaInicio = get('Hora inicio');
-  const horaFin = get('Hora fin');
+  const correo = get('Correo').toLowerCase();
+  const dia1Raw = get('Dia 1');
+  const dia2Raw = get('Dia 2');
+  const horaInicio = get('Horario inicio');
+  const horaFin = get('Horario fin');
   const fechaInicio = toDateStr(norm[normalize('Fecha inicio')]);
   const fechaFin = toDateStr(norm[normalize('Fecha fin')]);
 
   const errors = [];
   const room = roomsByCode[roomCode];
 
-  if (!roomCode) errors.push('Falta el código del espacio.');
+  if (!roomCode) errors.push('Falta el código del aula/espacio.');
   else if (!room) errors.push(`No existe ningún espacio con el código "${roomCode}".`);
 
-  if (!materia) errors.push('Falta la materia.');
+  if (!materia) errors.push('Falta el nombre del curso.');
   if (!docente) errors.push('Falta el nombre del docente.');
   if (!EMAIL_REGEX.test(correo)) errors.push('El correo del docente debe ser institucional (@udea.edu.co).');
 
-  const days = parseDays(diasRaw);
-  if (days.length === 0) errors.push('No se pudieron interpretar los días (usa L, M, X, J, V, S, D).');
+  const day1 = parseDay(dia1Raw);
+  const day2 = dia2Raw ? parseDay(dia2Raw) : null;
+  if (day1 === null) errors.push('"Dia 1" no se pudo interpretar (usa L, M, W, J, V, S o D).');
+  if (dia2Raw && day2 === null) errors.push('"Dia 2" no se pudo interpretar (usa L, M, W, J, V, S o D).');
+  const days = Array.from(new Set([day1, day2].filter((d) => d !== null && d !== undefined))).sort();
 
-  if (!TIME_REGEX.test(horaInicio)) errors.push('Hora de inicio inválida (usa HH:MM, ej. 14:00).');
-  if (!TIME_REGEX.test(horaFin)) errors.push('Hora de fin inválida (usa HH:MM, ej. 16:00).');
+  if (!TIME_REGEX.test(horaInicio)) errors.push('Horario de inicio inválido (usa HH:MM, ej. 14:00).');
+  if (!TIME_REGEX.test(horaFin)) errors.push('Horario de fin inválido (usa HH:MM, ej. 16:00).');
   if (TIME_REGEX.test(horaInicio) && TIME_REGEX.test(horaFin) && horaFin <= horaInicio) {
-    errors.push('La hora de fin debe ser después de la hora de inicio.');
+    errors.push('El horario de fin debe ser después del horario de inicio.');
   }
 
   if (!DATE_REGEX.test(fechaInicio)) errors.push('Fecha de inicio inválida (usa AAAA-MM-DD).');
@@ -182,9 +182,9 @@ export default function CargaMasiva() {
 
   async function handleDownloadTemplate() {
     const XLSX = await import('xlsx');
-    const example = ['25214', 'Armonía I', 'Prof. Juan Pérez', 'juan.perez@udea.edu.co', 'L,X', '14:00', '16:00', '2026-08-03', '2026-11-28'];
+    const example = ['Armonía I', 'L', 'W', '14:00', '16:00', '25214', 'Prof. Juan Pérez', 'juan.perez@udea.edu.co', '2026-08-03', '2026-11-28'];
     const ws = XLSX.utils.aoa_to_sheet([EXPECTED_HEADERS, example]);
-    ws['!cols'] = EXPECTED_HEADERS.map(() => ({ wch: 20 }));
+    ws['!cols'] = EXPECTED_HEADERS.map(() => ({ wch: 18 }));
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Plantilla');
     XLSX.writeFile(wb, 'plantilla-carga-masiva.xlsx');
@@ -212,7 +212,10 @@ export default function CargaMasiva() {
         return;
       }
 
-      const validated = rawRows.map((row, idx) => validateRow(row, idx + 2, roomsByCode));
+      const validated = rawRows
+        .map((row, idx) => validateRow(row, idx + 2, roomsByCode))
+        .filter((row) => row.materia || row.docente || row.roomCode); // ignora filas totalmente vacías
+
       setParsedRows(validated);
     } catch (err) {
       console.error('[carga-masiva] error leyendo archivo:', err);
@@ -361,9 +364,9 @@ export default function CargaMasiva() {
           {EXPECTED_HEADERS.join(' | ')}
         </div>
         <ul style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 12px', paddingLeft: 18 }}>
-          <li><strong>Espacio</strong>: el código exacto del cubículo, aula o auditorio (ej. 25214).</li>
-          <li><strong>Dias</strong>: letras separadas por coma — L, M, X, J, V, S, D (X = miércoles).</li>
-          <li><strong>Hora inicio / Hora fin</strong>: formato 24 horas, ej. 14:00.</li>
+          <li><strong>Aula</strong>: el código exacto del cubículo, aula o auditorio (ej. 25214).</li>
+          <li><strong>Dia 1 / Dia 2</strong>: una letra por columna — L, M, W, J, V, S, D (W = miércoles). "Dia 2" es opcional si el curso solo es un día a la semana.</li>
+          <li><strong>Horario inicio / Horario fin</strong>: formato 24 horas, ej. 14:00.</li>
           <li><strong>Fecha inicio / Fecha fin</strong>: formato AAAA-MM-DD, ej. 2026-08-03.</li>
         </ul>
         <button
@@ -412,8 +415,8 @@ export default function CargaMasiva() {
               <thead>
                 <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
                   <th style={{ padding: 6 }}>Fila</th>
-                  <th style={{ padding: 6 }}>Espacio</th>
-                  <th style={{ padding: 6 }}>Materia</th>
+                  <th style={{ padding: 6 }}>Aula</th>
+                  <th style={{ padding: 6 }}>Curso</th>
                   <th style={{ padding: 6 }}>Docente</th>
                   <th style={{ padding: 6 }}>Días</th>
                   <th style={{ padding: 6 }}>Horario</th>
@@ -498,9 +501,9 @@ export default function CargaMasiva() {
               <thead>
                 <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
                   <th style={{ padding: 6 }}>Fila</th>
-                  <th style={{ padding: 6 }}>Materia</th>
+                  <th style={{ padding: 6 }}>Curso</th>
                   <th style={{ padding: 6 }}>Docente</th>
-                  <th style={{ padding: 6 }}>Espacio</th>
+                  <th style={{ padding: 6 }}>Aula</th>
                   <th style={{ padding: 6 }}>Resultado</th>
                 </tr>
               </thead>
