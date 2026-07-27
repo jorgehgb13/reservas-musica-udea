@@ -40,13 +40,34 @@ function timeOptions(durationMin) {
   return opts;
 }
 
+// Colombia siempre está en UTC-5 (no tiene horario de verano), así que
+// podemos calcular la fecha/hora de Bogotá restando 5 horas al UTC actual.
+function nowBogota() {
+  const now = new Date();
+  const shifted = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  return {
+    dateStr: `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}`,
+    minutes: shifted.getUTCHours() * 60 + shifted.getUTCMinutes(),
+  };
+}
+
+// Igual que timeOptions, pero si la fecha elegida es hoy, quita los
+// horarios que ya pasaron (para no confundir ni dejar enviar algo vencido).
+function timeOptionsForDate(dateStr, durationMin) {
+  const opts = timeOptions(durationMin);
+  const { dateStr: todayBogota, minutes: nowMin } = nowBogota();
+  if (dateStr !== todayBogota) return opts;
+  const nextSlot = Math.ceil(nowMin / 30) * 30;
+  return opts.filter((t) => minsOfDay(t) >= nextSlot);
+}
+
 function minsOfDay(t) {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
 }
 
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  return nowBogota().dateStr;
 }
 
 export default function Reservar() {
@@ -76,6 +97,15 @@ export default function Reservar() {
   const [verifyError, setVerifyError] = useState(null);
   const [bounced, setBounced] = useState(false);
   const [finalStatus, setFinalStatus] = useState(null);
+
+  // Cada vez que cambia la fecha o la duración, si la hora elegida ya no es
+  // válida (por ejemplo, quedó en el pasado si la fecha es hoy), la
+  // ajustamos a la próxima franja disponible.
+  useEffect(() => {
+    const opts = timeOptionsForDate(date, duration);
+    if (opts.length === 0) return;
+    if (!opts.includes(start)) setStart(opts[0]);
+  }, [date, duration]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------- PASO 1 ----------
   async function handleSubmitStep1(e) {
@@ -171,6 +201,13 @@ export default function Reservar() {
   // ---------- PASO 4: crear la reserva real ----------
   async function handleCreateReservation() {
     setError(null);
+
+    const { dateStr: todayBogota, minutes: nowMin } = nowBogota();
+    if (date === todayBogota && minsOfDay(start) < nowMin) {
+      setError('Ese horario ya pasó. Elige un horario que todavía no haya empezado.');
+      return;
+    }
+
     setLoading(true);
     try {
       const res = await fetch('/api/reservations/create', {
@@ -354,8 +391,8 @@ export default function Reservar() {
             <select value={duration} onChange={(e) => {
               const val = parseInt(e.target.value, 10);
               setDuration(val);
-              const opts = timeOptions(val);
-              if (!opts.includes(start)) setStart(opts[0]);
+              const opts = timeOptionsForDate(date, val);
+              if (!opts.includes(start)) setStart(opts[0] || start);
             }} style={{ width: '100%', padding: 10, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14, boxSizing: 'border-box' }}>
               <option value={60}>1 hora</option>
               <option value={90}>1.5 horas</option>
@@ -365,12 +402,18 @@ export default function Reservar() {
         </div>
 
         <label style={{ fontSize: 12, color: '#5B6B60', display: 'block', marginBottom: 4 }}>Hora de inicio</label>
-        <select value={start} onChange={(e) => setStart(e.target.value)}
-          style={{ width: '100%', padding: 10, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14, marginBottom: 16, boxSizing: 'border-box' }}>
-          {timeOptions(duration).map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
+        {timeOptionsForDate(date, duration).length === 0 ? (
+          <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
+            Ya no queda ningún horario disponible hoy para esta duración. Elige otro día u otra duración.
+          </div>
+        ) : (
+          <select value={start} onChange={(e) => setStart(e.target.value)}
+            style={{ width: '100%', padding: 10, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14, marginBottom: 16, boxSizing: 'border-box' }}>
+            {timeOptionsForDate(date, duration).map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
 
         <div style={{ fontSize: 12, color: '#5B6B60', fontWeight: 500, marginBottom: 6 }}>
           Disponibilidad {loadingAvailability ? '· cargando…' : ''}
@@ -406,8 +449,12 @@ export default function Reservar() {
           <button onClick={() => setStep(2)} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
             Atrás
           </button>
-          <button onClick={() => setStep(4)}
-            style={{ flex: 1, padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+          <button onClick={() => setStep(4)} disabled={timeOptionsForDate(date, duration).length === 0}
+            style={{
+              flex: 1, padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600,
+              cursor: timeOptionsForDate(date, duration).length === 0 ? 'not-allowed' : 'pointer',
+              opacity: timeOptionsForDate(date, duration).length === 0 ? 0.6 : 1,
+            }}>
             Revisar y confirmar
           </button>
         </div>
