@@ -77,6 +77,14 @@ const STATUS_COLOR = {
 
 const ROOM_TYPE_LABEL = { cubiculo: 'Cubículos', aula: 'Aulas', auditorio: 'Auditorio' };
 const ROOM_TYPE_ORDER = ['cubiculo', 'aula', 'auditorio'];
+
+// Horas disponibles cada 30 minutos (00:00 a 23:30), para los selectores
+// de "Reserva manual" — así nunca se puede escribir una hora suelta.
+const HALF_HOUR_OPTIONS = Array.from({ length: 48 }, (_, i) => {
+  const h = Math.floor(i / 2);
+  const m = i % 2 === 0 ? '00' : '30';
+  return `${String(h).padStart(2, '0')}:${m}`;
+});
 const OCCUPANCY_TABS = [
   { key: 'todos', label: 'Todos' },
   { key: 'cubiculo', label: 'Cubículos' },
@@ -1543,23 +1551,29 @@ export default function AdminHome() {
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hora inicio</label>
-                  <input
-                    type="time"
+                  <select
                     value={manualStart}
                     onChange={(e) => setManualStart(e.target.value)}
                     required
                     style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
-                  />
+                  >
+                    {HALF_HOUR_OPTIONS.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hora fin</label>
-                  <input
-                    type="time"
+                  <select
                     value={manualEnd}
                     onChange={(e) => setManualEnd(e.target.value)}
                     required
                     style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
-                  />
+                  >
+                    {HALF_HOUR_OPTIONS.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
