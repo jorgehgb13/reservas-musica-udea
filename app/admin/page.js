@@ -41,6 +41,15 @@ const STATUS_COLOR = {
   rechazada: { bg: '#F7E8E5', fg: '#A23E33' },
 };
 
+const CATEGORY_LABEL = { viento: 'Viento', cuerda: 'Cuerda', percusion: 'Percusión', teclado: 'Teclado' };
+const CATEGORY_TABS = [
+  { key: 'todos', label: 'Todos' },
+  { key: 'viento', label: 'Viento' },
+  { key: 'cuerda', label: 'Cuerda' },
+  { key: 'percusion', label: 'Percusión' },
+  { key: 'teclado', label: 'Teclado' },
+];
+
 const ROOM_TYPE_LABEL = { cubiculo: 'Cubículos', aula: 'Aulas', auditorio: 'Auditorio' };
 const ROOM_TYPE_ORDER = ['cubiculo', 'aula', 'auditorio'];
 const OCCUPANCY_TABS = [
@@ -74,7 +83,7 @@ export default function AdminHome() {
   const [session, setSession] = useState(undefined);
   const router = useRouter();
 
-  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones'
+  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos'
   const [date, setDate] = useState(todayStr());
   const [reservations, setReservations] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
@@ -100,6 +109,28 @@ export default function AdminHome() {
   const [sFormError, setSFormError] = useState(null);
   const [sFormSuccess, setSFormSuccess] = useState(null);
   const [sNeedsName, setSNeedsName] = useState(false);
+
+  // ---------- Instrumentos ----------
+  const [instruments, setInstruments] = useState([]);
+  const [instrumentsLoading, setInstrumentsLoading] = useState(false);
+  const [instrumentsError, setInstrumentsError] = useState(null);
+  const [instrumentCategoryFilter, setInstrumentCategoryFilter] = useState('todos');
+  const [showInactiveInstruments, setShowInactiveInstruments] = useState(false);
+
+  const [iName, setIName] = useState('');
+  const [iCategory, setICategory] = useState('viento');
+  const [iInventoryNumber, setIInventoryNumber] = useState('');
+  const [iSubmitting, setISubmitting] = useState(false);
+  const [iFormError, setIFormError] = useState(null);
+  const [iFormSuccess, setIFormSuccess] = useState(null);
+
+  const [editingInstrumentId, setEditingInstrumentId] = useState(null);
+  const [editName, setEditName] = useState('');
+  const [editCategory, setEditCategory] = useState('viento');
+  const [editInventoryNumber, setEditInventoryNumber] = useState('');
+  const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editError, setEditError] = useState(null);
+  const [toggleId, setToggleId] = useState(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
@@ -174,6 +205,29 @@ export default function AdminHome() {
   useEffect(() => {
     if (session && view === 'sanciones') loadSanctions();
   }, [session, view, loadSanctions]);
+
+  const loadInstruments = useCallback(async () => {
+    setInstrumentsLoading(true);
+    setInstrumentsError(null);
+    const { data, error } = await supabase
+      .from('instruments')
+      .select('id, name, category, inventory_number, active')
+      .order('category', { ascending: true })
+      .order('name', { ascending: true });
+
+    if (error) {
+      console.error('[admin] error cargando instrumentos:', error);
+      setInstrumentsError(`No se pudieron cargar los instrumentos: ${error.message}`);
+      setInstruments([]);
+    } else {
+      setInstruments(data || []);
+    }
+    setInstrumentsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (session && view === 'instrumentos') loadInstruments();
+  }, [session, view, loadInstruments]);
 
   // Cuando cambia el correo escrito, revisamos si ya existe esa persona
   // para no pedir el nombre otra vez si ya la tenemos registrada.
@@ -364,6 +418,104 @@ export default function AdminHome() {
     setLiftingId(null);
   }
 
+  async function handleCreateInstrument(e) {
+    e.preventDefault();
+    setIFormError(null);
+    setIFormSuccess(null);
+
+    const name = iName.trim();
+    const inventoryNumber = iInventoryNumber.trim();
+    if (!name) {
+      setIFormError('Escribe el nombre del instrumento.');
+      return;
+    }
+    if (!inventoryNumber) {
+      setIFormError('Escribe el número de inventario.');
+      return;
+    }
+
+    setISubmitting(true);
+    const { error } = await supabase
+      .from('instruments')
+      .insert({ name, category: iCategory, inventory_number: inventoryNumber });
+
+    if (error) {
+      console.error('[admin] error creando instrumento:', error);
+      if (error.code === '23505') {
+        setIFormError('Ya existe un instrumento con ese número de inventario.');
+      } else {
+        setIFormError(`No se pudo crear el instrumento: ${error.message}`);
+      }
+      setISubmitting(false);
+      return;
+    }
+
+    setIFormSuccess('Instrumento agregado correctamente.');
+    setIName('');
+    setIInventoryNumber('');
+    setICategory('viento');
+    await loadInstruments();
+    setISubmitting(false);
+  }
+
+  async function handleToggleInstrumentActive(instrument) {
+    setToggleId(instrument.id);
+    const { error } = await supabase
+      .from('instruments')
+      .update({ active: !instrument.active })
+      .eq('id', instrument.id);
+    if (error) {
+      console.error('[admin] error actualizando instrumento:', error);
+      setInstrumentsError(`No se pudo actualizar el instrumento: ${error.message}`);
+    } else {
+      await loadInstruments();
+    }
+    setToggleId(null);
+  }
+
+  function startEditInstrument(instrument) {
+    setEditingInstrumentId(instrument.id);
+    setEditName(instrument.name);
+    setEditCategory(instrument.category);
+    setEditInventoryNumber(instrument.inventory_number);
+    setEditError(null);
+  }
+
+  function cancelEditInstrument() {
+    setEditingInstrumentId(null);
+    setEditError(null);
+  }
+
+  async function saveEditInstrument(id) {
+    const name = editName.trim();
+    const inventoryNumber = editInventoryNumber.trim();
+    if (!name || !inventoryNumber) {
+      setEditError('El nombre y el número de inventario no pueden quedar vacíos.');
+      return;
+    }
+    setEditSubmitting(true);
+    setEditError(null);
+    const { error } = await supabase
+      .from('instruments')
+      .update({ name, category: editCategory, inventory_number: inventoryNumber })
+      .eq('id', id);
+
+    if (error) {
+      console.error('[admin] error editando instrumento:', error);
+      if (error.code === '23505') {
+        setEditError('Ya existe un instrumento con ese número de inventario.');
+      } else {
+        setEditError(`No se pudo guardar: ${error.message}`);
+      }
+      setEditSubmitting(false);
+      return;
+    }
+
+    setEditingInstrumentId(null);
+    setEditSubmitting(false);
+    await loadInstruments();
+  }
+
   if (session === undefined) {
     return <main style={{ padding: 40, textAlign: 'center', color: '#5B6B60' }}>Cargando…</main>;
   }
@@ -385,6 +537,12 @@ export default function AdminHome() {
 
   const now = new Date();
   const visibleSanctions = showAllSanctions ? sanctions : sanctions.filter((s) => new Date(s.until) > now);
+
+  const visibleInstruments = instruments.filter((i) => {
+    if (!showInactiveInstruments && !i.active) return false;
+    if (instrumentCategoryFilter !== 'todos' && i.category !== instrumentCategoryFilter) return false;
+    return true;
+  });
 
   return (
     <main style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
@@ -427,10 +585,20 @@ export default function AdminHome() {
           style={{
             padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
             border: 'none', borderBottom: view === 'sanciones' ? '2px solid #0B6E4F' : '2px solid transparent',
-            color: view === 'sanciones' ? '#0B6E4F' : '#5B6B60',
+            color: view === 'sanciones' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
           }}
         >
           Sanciones
+        </button>
+        <button
+          onClick={() => setView('instrumentos')}
+          style={{
+            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
+            border: 'none', borderBottom: view === 'instrumentos' ? '2px solid #0B6E4F' : '2px solid transparent',
+            color: view === 'instrumentos' ? '#0B6E4F' : '#5B6B60',
+          }}
+        >
+          Instrumentos
         </button>
       </div>
 
@@ -789,6 +957,229 @@ export default function AdminHome() {
                             {liftingId === s.id ? 'Levantando...' : 'Levantar sanción'}
                           </button>
                         )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {view === 'instrumentos' && (
+        <>
+          <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18, marginBottom: 26 }}>
+            <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 14px' }}>Agregar instrumento</h2>
+
+            <form onSubmit={handleCreateInstrument}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr 1fr', gap: 12, marginBottom: 14 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    Nombre
+                  </label>
+                  <input
+                    type="text"
+                    value={iName}
+                    onChange={(e) => setIName(e.target.value)}
+                    placeholder="Ej: Violín 3/4"
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    Categoría
+                  </label>
+                  <select
+                    value={iCategory}
+                    onChange={(e) => setICategory(e.target.value)}
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  >
+                    {Object.entries(CATEGORY_LABEL).map(([key, label]) => (
+                      <option key={key} value={key}>{label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    N° de inventario
+                  </label>
+                  <input
+                    type="text"
+                    value={iInventoryNumber}
+                    onChange={(e) => setIInventoryNumber(e.target.value)}
+                    placeholder="Ej: INV-0042"
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+              </div>
+
+              {iFormError && (
+                <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {iFormError}
+                </div>
+              )}
+              {iFormSuccess && (
+                <div style={{ background: '#E4F0EA', border: '1px solid #bcd9c9', color: '#084F39', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {iFormSuccess}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={iSubmitting}
+                style={{
+                  padding: '9px 18px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #0B6E4F',
+                  background: '#0B6E4F', color: '#fff', cursor: iSubmitting ? 'not-allowed' : 'pointer', opacity: iSubmitting ? 0.7 : 1,
+                }}
+              >
+                {iSubmitting ? 'Guardando...' : 'Agregar instrumento'}
+              </button>
+            </form>
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12, flexWrap: 'wrap', gap: 10 }}>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {CATEGORY_TABS.map((t) => (
+                <button
+                  key={t.key}
+                  onClick={() => setInstrumentCategoryFilter(t.key)}
+                  style={{
+                    padding: '6px 14px', fontSize: 12, fontWeight: 600, borderRadius: 20, cursor: 'pointer',
+                    border: instrumentCategoryFilter === t.key ? '1px solid #0B6E4F' : '1px solid #DBDCCF',
+                    background: instrumentCategoryFilter === t.key ? '#0B6E4F' : '#fff',
+                    color: instrumentCategoryFilter === t.key ? '#fff' : '#16241C',
+                  }}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#5B6B60', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={showInactiveInstruments}
+                onChange={(e) => setShowInactiveInstruments(e.target.checked)}
+              />
+              Mostrar inactivos
+            </label>
+          </div>
+
+          {instrumentsError && (
+            <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+              {instrumentsError}
+            </div>
+          )}
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
+                  <th style={{ padding: 8 }}>Nombre</th>
+                  <th style={{ padding: 8 }}>Categoría</th>
+                  <th style={{ padding: 8 }}>N° inventario</th>
+                  <th style={{ padding: 8 }}>Estado</th>
+                  <th style={{ padding: 8 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleInstruments.length === 0 && !instrumentsLoading && (
+                  <tr>
+                    <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                      No hay instrumentos que coincidan con este filtro.
+                    </td>
+                  </tr>
+                )}
+                {visibleInstruments.map((inst) => {
+                  const isEditing = editingInstrumentId === inst.id;
+                  if (isEditing) {
+                    return (
+                      <tr key={inst.id} style={{ borderBottom: '1px solid #DBDCCF', background: '#FBFAF3' }}>
+                        <td style={{ padding: 8 }}>
+                          <input
+                            type="text"
+                            value={editName}
+                            onChange={(e) => setEditName(e.target.value)}
+                            style={{ width: '100%', padding: 6, fontSize: 12, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                          />
+                        </td>
+                        <td style={{ padding: 8 }}>
+                          <select
+                            value={editCategory}
+                            onChange={(e) => setEditCategory(e.target.value)}
+                            style={{ width: '100%', padding: 6, fontSize: 12, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                          >
+                            {Object.entries(CATEGORY_LABEL).map(([key, label]) => (
+                              <option key={key} value={key}>{label}</option>
+                            ))}
+                          </select>
+                        </td>
+                        <td style={{ padding: 8 }}>
+                          <input
+                            type="text"
+                            value={editInventoryNumber}
+                            onChange={(e) => setEditInventoryNumber(e.target.value)}
+                            style={{ width: '100%', padding: 6, fontSize: 12, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                          />
+                        </td>
+                        <td style={{ padding: 8 }} colSpan={2}>
+                          {editError && (
+                            <div style={{ color: '#A23E33', fontSize: 11, marginBottom: 6 }}>{editError}</div>
+                          )}
+                          <button
+                            onClick={() => saveEditInstrument(inst.id)}
+                            disabled={editSubmitting}
+                            style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #0B6E4F', color: '#0B6E4F', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}
+                          >
+                            {editSubmitting ? 'Guardando...' : 'Guardar'}
+                          </button>
+                          <button
+                            onClick={cancelEditInstrument}
+                            disabled={editSubmitting}
+                            style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #DBDCCF', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
+                          >
+                            Cancelar
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  }
+                  return (
+                    <tr key={inst.id} style={{ borderBottom: '1px solid #DBDCCF', opacity: inst.active ? 1 : 0.6 }}>
+                      <td style={{ padding: 8 }}>{inst.name}</td>
+                      <td style={{ padding: 8 }}>{CATEGORY_LABEL[inst.category] || inst.category}</td>
+                      <td style={{ padding: 8, fontFamily: 'monospace' }}>{inst.inventory_number}</td>
+                      <td style={{ padding: 8 }}>
+                        <span
+                          style={{
+                            background: inst.active ? '#E4F0EA' : '#eee',
+                            color: inst.active ? '#084F39' : '#888',
+                            fontSize: 11, fontWeight: 600, padding: '3px 9px', borderRadius: 20,
+                          }}
+                        >
+                          {inst.active ? 'Activo' : 'Inactivo'}
+                        </span>
+                      </td>
+                      <td style={{ padding: 8, whiteSpace: 'nowrap' }}>
+                        <button
+                          onClick={() => startEditInstrument(inst)}
+                          style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #16241C', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}
+                        >
+                          Editar
+                        </button>
+                        <button
+                          onClick={() => handleToggleInstrumentActive(inst)}
+                          disabled={toggleId === inst.id}
+                          style={{
+                            padding: '5px 10px', fontSize: 12, borderRadius: 6, background: 'transparent', cursor: 'pointer',
+                            border: inst.active ? '1px solid #A23E33' : '1px solid #0B6E4F',
+                            color: inst.active ? '#A23E33' : '#0B6E4F',
+                          }}
+                        >
+                          {toggleId === inst.id ? '...' : inst.active ? 'Desactivar' : 'Activar'}
+                        </button>
                       </td>
                     </tr>
                   );
