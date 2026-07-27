@@ -8,6 +8,14 @@ const TYPE_META = {
   aula: { label: 'Aula', icon: '🎹', needsApproval: true },
 };
 
+// Cubículos que, por excepción, también necesitan aprobación del
+// administrador (igual que un aula), aunque su tipo sea "cubiculo".
+const ROOM_CODES_REQUIRE_APPROVAL = ['25307'];
+
+function roomNeedsApproval(type, room) {
+  return !!TYPE_META[type]?.needsApproval || ROOM_CODES_REQUIRE_APPROVAL.includes(room?.code);
+}
+
 const OPERATING_START = 6;
 const OPERATING_END = 20;
 
@@ -309,13 +317,14 @@ export default function Reservar() {
   if (step === 3) {
     const dayStartMin = OPERATING_START * 60;
     const daySpan = (OPERATING_END - OPERATING_START) * 60;
+    const currentRoom = rooms.find((r) => r.id === roomId);
 
     return (
       <main style={{ maxWidth: 420, margin: '40px auto 0', padding: '0 16px' }}>
         <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 4 }}>
           {TYPE_META[type]?.label}
         </h1>
-        {TYPE_META[type]?.needsApproval && (
+        {roomNeedsApproval(type, currentRoom) && (
           <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 14 }}>
             Tu reserva quedará en firme solo si el administrador la autoriza.
           </div>
@@ -425,7 +434,7 @@ export default function Reservar() {
             {error}
           </div>
         )}
-        {TYPE_META[type]?.needsApproval && (
+        {roomNeedsApproval(type, selectedRoom) && (
           <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 12 }}>
             Su reserva quedará en firme solo si el administrador la autoriza.
           </div>
@@ -440,7 +449,7 @@ export default function Reservar() {
           </button>
           <button onClick={handleCreateReservation} disabled={loading}
             style={{ flex: 1, padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: loading ? 'default' : 'pointer', opacity: loading ? 0.7 : 1 }}>
-            {loading ? 'Guardando…' : TYPE_META[type]?.needsApproval ? 'Enviar solicitud' : 'Confirmar reserva'}
+            {loading ? 'Guardando…' : roomNeedsApproval(type, selectedRoom) ? 'Enviar solicitud' : 'Confirmar reserva'}
           </button>
         </div>
       </main>
