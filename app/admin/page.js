@@ -135,12 +135,18 @@ export default function AdminHome() {
   const [session, setSession] = useState(undefined);
   const router = useRouter();
 
-  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos' | 'semana' | 'estadisticas'
+  const [view, setView] = useState('lista'); // 'lista' | 'ocupacion' | 'sanciones' | 'instrumentos' | 'semana' | 'estadisticas' | 'aprobaciones'
   const [date, setDate] = useState(todayStr());
   const [reservations, setReservations] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [listError, setListError] = useState(null);
   const [actionId, setActionId] = useState(null);
+
+  // ---------- Aprobaciones pendientes ----------
+  const [pendingApprovals, setPendingApprovals] = useState([]);
+  const [pendingApprovalsLoading, setPendingApprovalsLoading] = useState(false);
+  const [pendingApprovalsError, setPendingApprovalsError] = useState(null);
+  const [pendingActionId, setPendingActionId] = useState(null);
 
   const [rooms, setRooms] = useState([]);
   const [roomsError, setRoomsError] = useState(null);
@@ -246,6 +252,30 @@ export default function AdminHome() {
   useEffect(() => {
     if (session) loadReservations();
   }, [session, loadReservations]);
+
+  const loadPendingApprovals = useCallback(async () => {
+    setPendingApprovalsLoading(true);
+    setPendingApprovalsError(null);
+    const { data, error } = await supabase
+      .from('reservations')
+      .select('id, date, start_time, end_time, status, rooms ( name ), app_users ( name, email )')
+      .eq('status', 'pendiente')
+      .order('date', { ascending: true })
+      .order('start_time', { ascending: true });
+
+    if (error) {
+      console.error('[admin] error cargando aprobaciones pendientes:', error);
+      setPendingApprovalsError(`No se pudieron cargar las aprobaciones pendientes: ${error.message}`);
+      setPendingApprovals([]);
+    } else {
+      setPendingApprovals(data || []);
+    }
+    setPendingApprovalsLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (session) loadPendingApprovals();
+  }, [session, view, loadPendingApprovals]);
 
   useEffect(() => {
     if (!session) return;
@@ -493,6 +523,36 @@ export default function AdminHome() {
       await loadReservations();
     }
     setActionId(null);
+  }
+
+  async function handlePendingApprove(id) {
+    setPendingActionId(id);
+    const { error } = await supabase
+      .from('reservations')
+      .update({ status: 'confirmada' })
+      .eq('id', id);
+    if (error) {
+      console.error('[admin] error aprobando:', error);
+      setPendingApprovalsError(`No se pudo aprobar la reserva: ${error.message}`);
+    } else {
+      await loadPendingApprovals();
+    }
+    setPendingActionId(null);
+  }
+
+  async function handlePendingReject(id) {
+    setPendingActionId(id);
+    const { error } = await supabase
+      .from('reservations')
+      .update({ status: 'rechazada' })
+      .eq('id', id);
+    if (error) {
+      console.error('[admin] error rechazando:', error);
+      setPendingApprovalsError(`No se pudo rechazar la reserva: ${error.message}`);
+    } else {
+      await loadPendingApprovals();
+    }
+    setPendingActionId(null);
   }
 
   async function handleLogout() {
@@ -937,6 +997,29 @@ export default function AdminHome() {
           Reservas del día
         </button>
         <button
+          onClick={() => setView('aprobaciones')}
+          style={{
+            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
+            border: 'none', borderBottom: view === 'aprobaciones' ? '2px solid #0B6E4F' : '2px solid transparent',
+            color: view === 'aprobaciones' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
+            display: 'inline-flex', alignItems: 'center', gap: 6,
+          }}
+        >
+          Aprobaciones
+          {pendingApprovals.length > 0 && (
+            <span
+              style={{
+                background: '#A23E33', color: '#fff', fontSize: 11, fontWeight: 700,
+                minWidth: 18, height: 18, borderRadius: 9, display: 'inline-flex',
+                alignItems: 'center', justifyContent: 'center', padding: '0 5px',
+              }}
+              title={`${pendingApprovals.length} solicitud(es) pendiente(s) de aprobación`}
+            >
+              {pendingApprovals.length}
+            </span>
+          )}
+        </button>
+        <button
           onClick={() => setView('ocupacion')}
           style={{
             padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
@@ -1089,6 +1172,67 @@ export default function AdminHome() {
                     </tr>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+
+      {view === 'aprobaciones' && (
+        <>
+          <p style={{ fontSize: 13, color: '#5B6B60', marginBottom: 16 }}>
+            Todas las solicitudes de aula o auditorio que están esperando tu aprobación, sin importar la fecha.
+          </p>
+
+          {pendingApprovalsError && (
+            <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+              {pendingApprovalsError}
+            </div>
+          )}
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
+                  <th style={{ padding: 8 }}>Espacio</th>
+                  <th style={{ padding: 8 }}>Fecha</th>
+                  <th style={{ padding: 8 }}>Horario</th>
+                  <th style={{ padding: 8 }}>Solicitante</th>
+                  <th style={{ padding: 8 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingApprovals.length === 0 && !pendingApprovalsLoading && (
+                  <tr>
+                    <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                      No hay solicitudes pendientes de aprobación. 🎉
+                    </td>
+                  </tr>
+                )}
+                {pendingApprovals.map((r) => (
+                  <tr key={r.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
+                    <td style={{ padding: 8 }}>{r.rooms?.name || '—'}</td>
+                    <td style={{ padding: 8 }}>{r.date}</td>
+                    <td style={{ padding: 8, fontFamily: 'monospace' }}>
+                      {r.start_time?.slice(0, 5)}-{r.end_time?.slice(0, 5)}
+                    </td>
+                    <td style={{ padding: 8 }}>
+                      {r.app_users?.name || '—'}
+                      <br />
+                      <span style={{ color: '#5B6B60', fontSize: 11 }}>{r.app_users?.email}</span>
+                    </td>
+                    <td style={{ padding: 8, whiteSpace: 'nowrap' }}>
+                      <button onClick={() => handlePendingApprove(r.id)} disabled={pendingActionId === r.id}
+                        style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #0B6E4F', color: '#0B6E4F', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}>
+                        {pendingActionId === r.id ? '...' : 'Aprobar'}
+                      </button>
+                      <button onClick={() => handlePendingReject(r.id)} disabled={pendingActionId === r.id}
+                        style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #A23E33', color: '#A23E33', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}>
+                        {pendingActionId === r.id ? '...' : 'Rechazar'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
