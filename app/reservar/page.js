@@ -122,7 +122,7 @@ export default function Reservar() {
     setError(null);
 
     if (!accepted) {
-      setError('Debes confirmar que eres estudiante activo y aceptar el reglamento.');
+      setError('Debes confirmar que eres estudiante o profesor activo y aceptar el reglamento.');
       return;
     }
 
@@ -328,7 +328,7 @@ export default function Reservar() {
           </div>
           <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, color: '#5B6B60', marginBottom: 18 }}>
             <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} style={{ marginTop: 2 }} />
-            <span>Declaro que soy estudiante activo de la Universidad de Antioquia y acepto el reglamento de uso de los espacios.</span>
+            <span>Declaro que soy estudiante o profesor activo de la Universidad de Antioquia y acepto el reglamento de uso de los espacios.</span>
           </label>
           <button type="submit" disabled={loading}
             style={{ width: '100%', padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: loading ? 'default' : 'pointer', opacity: loading ? 0.7 : 1 }}>
