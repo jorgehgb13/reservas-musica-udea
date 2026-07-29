@@ -244,7 +244,9 @@ export default function CargaMasiva() {
     setResults(null);
 
     let templatesCreated = 0;
+    let templatesUpdated = 0;
     let reservationsCreated = 0;
+    let reservationsUpdated = 0;
     let reservationsSkipped = 0;
     const rowResults = [];
 
@@ -270,57 +272,124 @@ export default function CargaMasiva() {
           userId = newUser.id;
         }
 
-        const { data: templateData, error: templateError } = await supabase
+        // Busca si esta misma clase (mismo espacio, horario y rango de fechas)
+        // ya se había cargado antes, para no crear una plantilla duplicada.
+        const { data: candidateTemplates, error: findTemplateError } = await supabase
           .from('recurring_templates')
-          .insert({
-            room_id: row.room.id,
-            materia: row.materia,
-            docente: row.docente,
-            user_id: userId,
-            days_of_week: row.days,
-            start_time: row.horaInicio,
-            end_time: row.horaFin,
-            date_from: row.fechaInicio,
-            date_to: row.fechaFin,
-            origin: 'admin-recurrente-excel',
-          })
-          .select('id')
-          .single();
-        if (templateError) throw templateError;
-        templatesCreated += 1;
+          .select('id, days_of_week')
+          .eq('room_id', row.room.id)
+          .eq('start_time', row.horaInicio)
+          .eq('end_time', row.horaFin)
+          .eq('date_from', row.fechaInicio)
+          .eq('date_to', row.fechaFin);
+        if (findTemplateError) throw findTemplateError;
+
+        const sortedRowDays = [...row.days].sort().join(',');
+        const matchingTemplate = (candidateTemplates || []).find(
+          (t) => [...(t.days_of_week || [])].sort().join(',') === sortedRowDays
+        );
+
+        let templateId;
+        let templateIsNew = false;
+
+        if (matchingTemplate) {
+          templateId = matchingTemplate.id;
+          const { error: updateTemplateError } = await supabase
+            .from('recurring_templates')
+            .update({ materia: row.materia, docente: row.docente, user_id: userId })
+            .eq('id', templateId);
+          if (updateTemplateError) throw updateTemplateError;
+          templatesUpdated += 1;
+        } else {
+          const { data: templateData, error: templateError } = await supabase
+            .from('recurring_templates')
+            .insert({
+              room_id: row.room.id,
+              materia: row.materia,
+              docente: row.docente,
+              user_id: userId,
+              days_of_week: row.days,
+              start_time: row.horaInicio,
+              end_time: row.horaFin,
+              date_from: row.fechaInicio,
+              date_to: row.fechaFin,
+              origin: 'admin-recurrente-excel',
+            })
+            .select('id')
+            .single();
+          if (templateError) throw templateError;
+          templateId = templateData.id;
+          templateIsNew = true;
+          templatesCreated += 1;
+        }
 
         const occurrences = computeOccurrences(row.fechaInicio, row.fechaFin, row.days);
         let created = 0;
+        let updated = 0;
         let skipped = 0;
 
         for (const date of occurrences) {
-          const { error: resError } = await supabase.from('reservations').insert({
-            room_id: row.room.id,
-            user_id: userId,
-            date,
-            start_time: row.horaInicio,
-            end_time: row.horaFin,
-            status: 'confirmada',
-            requires_approval: false,
-            forced: true,
-            recurring_template_id: templateData.id,
-            clase: row.materia,
-          });
-          if (resError) {
+          // Si ya existe una reserva activa en ese espacio/día/horario (ya sea
+          // de una carga anterior o creada de otra forma), no se duplica —
+          // solo se le pone/actualiza el nombre de la clase.
+          const { data: existingReservation, error: findResError } = await supabase
+            .from('reservations')
+            .select('id')
+            .eq('room_id', row.room.id)
+            .eq('date', date)
+            .eq('start_time', row.horaInicio)
+            .eq('end_time', row.horaFin)
+            .neq('status', 'cancelada')
+            .neq('status', 'rechazada')
+            .maybeSingle();
+
+          if (findResError) {
             skipped += 1;
+            continue;
+          }
+
+          if (existingReservation) {
+            const { error: updateResError } = await supabase
+              .from('reservations')
+              .update({ clase: row.materia, recurring_template_id: templateId })
+              .eq('id', existingReservation.id);
+            if (updateResError) {
+              skipped += 1;
+            } else {
+              updated += 1;
+            }
           } else {
-            created += 1;
+            const { error: resError } = await supabase.from('reservations').insert({
+              room_id: row.room.id,
+              user_id: userId,
+              date,
+              start_time: row.horaInicio,
+              end_time: row.horaFin,
+              status: 'confirmada',
+              requires_approval: false,
+              forced: true,
+              recurring_template_id: templateId,
+              clase: row.materia,
+            });
+            if (resError) {
+              skipped += 1;
+            } else {
+              created += 1;
+            }
           }
         }
 
         reservationsCreated += created;
+        reservationsUpdated += updated;
         reservationsSkipped += skipped;
         rowResults.push({
           rowNumber: row.rowNumber,
           materia: row.materia,
           docente: row.docente,
           roomName: row.room.name,
+          templateIsNew,
           created,
+          updated,
           skipped,
           ok: true,
         });
@@ -336,7 +405,14 @@ export default function CargaMasiva() {
       }
     }
 
-    setResults({ templatesCreated, reservationsCreated, reservationsSkipped, rowResults });
+    setResults({
+      templatesCreated,
+      templatesUpdated,
+      reservationsCreated,
+      reservationsUpdated,
+      reservationsSkipped,
+      rowResults,
+    });
     setProcessing(false);
   }
 
@@ -508,8 +584,10 @@ export default function CargaMasiva() {
           <div style={{ background: '#E4F0EA', border: '1px solid #bcd9c9', borderRadius: 8, padding: 18, marginBottom: 20 }}>
             <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 8px', color: '#084F39' }}>Carga terminada</h2>
             <p style={{ fontSize: 13, color: '#084F39', margin: 0 }}>
-              {results.templatesCreated} materia(s) recurrente(s) creada(s) · {results.reservationsCreated} clase(s) reservada(s)
-              {results.reservationsSkipped > 0 && <> · {results.reservationsSkipped} omitida(s) por choque de horario con algo que ya estaba ocupado</>}
+              {results.templatesCreated} materia(s) nueva(s) · {results.templatesUpdated} materia(s) ya existente(s) actualizada(s)
+              <br />
+              {results.reservationsCreated} clase(s) reservada(s) nueva(s) · {results.reservationsUpdated} reserva(s) existente(s) actualizada(s) con el nombre de la clase
+              {results.reservationsSkipped > 0 && <> · {results.reservationsSkipped} omitida(s) por un problema al guardar</>}
             </p>
           </div>
 
@@ -534,7 +612,10 @@ export default function CargaMasiva() {
                     <td style={{ padding: 6 }}>
                       {r.ok ? (
                         <>
-                          {r.created} clase(s) creada(s)
+                          {!r.templateIsNew && <span style={{ color: '#5B6B60' }}>materia ya existía · </span>}
+                          {r.created > 0 && <>{r.created} clase(s) nueva(s)</>}
+                          {r.created > 0 && r.updated > 0 && ' · '}
+                          {r.updated > 0 && <>{r.updated} actualizada(s)</>}
                           {r.skipped > 0 && <span style={{ color: '#A23E33' }}> · {r.skipped} omitida(s)</span>}
                         </>
                       ) : (
