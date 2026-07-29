@@ -165,6 +165,7 @@ export default function CargaMasiva() {
   const [globalError, setGlobalError] = useState(null);
 
   const [processing, setProcessing] = useState(false);
+  const [processingProgress, setProcessingProgress] = useState({ done: 0, total: 0 });
   const [results, setResults] = useState(null);
 
   useEffect(() => {
@@ -242,6 +243,7 @@ export default function CargaMasiva() {
 
     setProcessing(true);
     setResults(null);
+    setProcessingProgress({ done: 0, total: validRows.length });
 
     let templatesCreated = 0;
     let templatesUpdated = 0;
@@ -328,53 +330,71 @@ export default function CargaMasiva() {
         let updated = 0;
         let skipped = 0;
 
-        for (const date of occurrences) {
-          // Si ya existe una reserva activa en ese espacio/día/horario (ya sea
-          // de una carga anterior o creada de otra forma), no se duplica —
-          // solo se le pone/actualiza el nombre de la clase.
-          const { data: existingReservation, error: findResError } = await supabase
+        // Un solo viaje a la base de datos para saber cuáles de estas fechas
+        // ya tienen una reserva activa en ese espacio y horario.
+        const { data: existingReservations, error: findResError } = await supabase
+          .from('reservations')
+          .select('id, date')
+          .eq('room_id', row.room.id)
+          .eq('start_time', row.horaInicio)
+          .eq('end_time', row.horaFin)
+          .in('date', occurrences)
+          .neq('status', 'cancelada')
+          .neq('status', 'rechazada');
+        if (findResError) throw findResError;
+
+        const existingByDate = new Map((existingReservations || []).map((r) => [r.date, r.id]));
+        const existingIds = (existingReservations || []).map((r) => r.id);
+        const missingDates = occurrences.filter((d) => !existingByDate.has(d));
+
+        if (existingIds.length > 0) {
+          const { error: bulkUpdateError } = await supabase
             .from('reservations')
-            .select('id')
-            .eq('room_id', row.room.id)
-            .eq('date', date)
-            .eq('start_time', row.horaInicio)
-            .eq('end_time', row.horaFin)
-            .neq('status', 'cancelada')
-            .neq('status', 'rechazada')
-            .maybeSingle();
+            .update({ clase: row.materia, recurring_template_id: templateId })
+            .in('id', existingIds);
 
-          if (findResError) {
-            skipped += 1;
-            continue;
-          }
-
-          if (existingReservation) {
-            const { error: updateResError } = await supabase
-              .from('reservations')
-              .update({ clase: row.materia, recurring_template_id: templateId })
-              .eq('id', existingReservation.id);
-            if (updateResError) {
-              skipped += 1;
-            } else {
-              updated += 1;
-            }
+          if (!bulkUpdateError) {
+            updated += existingIds.length;
           } else {
-            const { error: resError } = await supabase.from('reservations').insert({
-              room_id: row.room.id,
-              user_id: userId,
-              date,
-              start_time: row.horaInicio,
-              end_time: row.horaFin,
-              status: 'confirmada',
-              requires_approval: false,
-              forced: true,
-              recurring_template_id: templateId,
-              clase: row.materia,
-            });
-            if (resError) {
-              skipped += 1;
-            } else {
-              created += 1;
+            // Si la actualización en bloque falla, se intenta una por una
+            // para no perder todo el avance de esta fila.
+            for (const id of existingIds) {
+              const { error } = await supabase
+                .from('reservations')
+                .update({ clase: row.materia, recurring_template_id: templateId })
+                .eq('id', id);
+              if (error) skipped += 1;
+              else updated += 1;
+            }
+          }
+        }
+
+        if (missingDates.length > 0) {
+          const newRows = missingDates.map((date) => ({
+            room_id: row.room.id,
+            user_id: userId,
+            date,
+            start_time: row.horaInicio,
+            end_time: row.horaFin,
+            status: 'confirmada',
+            requires_approval: false,
+            forced: true,
+            recurring_template_id: templateId,
+            clase: row.materia,
+          }));
+
+          const { error: bulkInsertError } = await supabase.from('reservations').insert(newRows);
+
+          if (!bulkInsertError) {
+            created += newRows.length;
+          } else {
+            // Si la creación en bloque falla (por ejemplo, un choque de
+            // horario puntual), se intenta fecha por fecha para saber
+            // exactamente cuáles sí se pudieron crear.
+            for (const newRow of newRows) {
+              const { error } = await supabase.from('reservations').insert(newRow);
+              if (error) skipped += 1;
+              else created += 1;
             }
           }
         }
@@ -403,6 +423,7 @@ export default function CargaMasiva() {
           error: err.message || 'Error desconocido',
         });
       }
+      setProcessingProgress((p) => ({ done: p.done + 1, total: p.total }));
     }
 
     setResults({
@@ -566,7 +587,7 @@ export default function CargaMasiva() {
                 opacity: processing || validCount === 0 ? 0.6 : 1,
               }}
             >
-              {processing ? 'Cargando…' : `Confirmar carga (${validCount} fila${validCount === 1 ? '' : 's'})`}
+              {processing ? `Procesando fila ${processingProgress.done} de ${processingProgress.total}…` : `Confirmar carga (${validCount} fila${validCount === 1 ? '' : 's'})`}
             </button>
             <button
               onClick={handleReset}
