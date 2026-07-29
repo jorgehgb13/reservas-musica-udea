@@ -270,18 +270,22 @@ export default function CargaMasiva() {
           userId = newUser.id;
         }
 
-        const { error: templateError } = await supabase.from('recurring_templates').insert({
-          room_id: row.room.id,
-          materia: row.materia,
-          docente: row.docente,
-          user_id: userId,
-          days_of_week: row.days,
-          start_time: row.horaInicio,
-          end_time: row.horaFin,
-          date_from: row.fechaInicio,
-          date_to: row.fechaFin,
-          origin: 'admin-recurrente-excel',
-        });
+        const { data: templateData, error: templateError } = await supabase
+          .from('recurring_templates')
+          .insert({
+            room_id: row.room.id,
+            materia: row.materia,
+            docente: row.docente,
+            user_id: userId,
+            days_of_week: row.days,
+            start_time: row.horaInicio,
+            end_time: row.horaFin,
+            date_from: row.fechaInicio,
+            date_to: row.fechaFin,
+            origin: 'admin-recurrente-excel',
+          })
+          .select('id')
+          .single();
         if (templateError) throw templateError;
         templatesCreated += 1;
 
@@ -299,6 +303,8 @@ export default function CargaMasiva() {
             status: 'confirmada',
             requires_approval: false,
             forced: true,
+            recurring_template_id: templateData.id,
+            clase: row.materia,
           });
           if (resError) {
             skipped += 1;
