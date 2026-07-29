@@ -204,6 +204,22 @@ export default function AdminHome() {
   const [weekLoading, setWeekLoading] = useState(false);
   const [weekError, setWeekError] = useState(null);
 
+  // ---------- Modal de crear/editar/mover desde "Por semana" ----------
+  const [weekModalOpen, setWeekModalOpen] = useState(false);
+  const [weekModalMode, setWeekModalMode] = useState('create'); // 'create' | 'edit'
+  const [weekModalReservationId, setWeekModalReservationId] = useState(null);
+  const [weekModalStatus, setWeekModalStatus] = useState(null);
+  const [weekModalEmail, setWeekModalEmail] = useState('@udea.edu.co');
+  const [weekModalName, setWeekModalName] = useState('');
+  const [weekModalNeedsName, setWeekModalNeedsName] = useState(false);
+  const [weekModalRoomId, setWeekModalRoomId] = useState('');
+  const [weekModalDate, setWeekModalDate] = useState(todayStr());
+  const [weekModalStart, setWeekModalStart] = useState('08:00');
+  const [weekModalEnd, setWeekModalEnd] = useState('10:00');
+  const [weekModalClase, setWeekModalClase] = useState('');
+  const [weekModalSubmitting, setWeekModalSubmitting] = useState(false);
+  const [weekModalError, setWeekModalError] = useState(null);
+
   // ---------- Estadísticas ----------
   const [statsFrom, setStatsFrom] = useState(addDays(todayStr(), -30));
   const [statsTo, setStatsTo] = useState(todayStr());
@@ -310,7 +326,7 @@ export default function AdminHome() {
     setPendingApprovalsError(null);
     const { data, error } = await supabase
       .from('reservations')
-      .select('id, date, start_time, end_time, status, rooms ( name ), app_users ( name, email )')
+      .select('id, date, start_time, end_time, status, clase, rooms ( name ), app_users ( name, email )')
       .eq('status', 'pendiente')
       .order('date', { ascending: true })
       .order('start_time', { ascending: true });
@@ -739,10 +755,6 @@ export default function AdminHome() {
       setManualFormError('Elige un espacio.');
       return;
     }
-    if (!manualClase.trim()) {
-      setManualFormError('Escribe el nombre de la clase.');
-      return;
-    }
     if (!manualStart || !manualEnd || manualEnd <= manualStart) {
       setManualFormError('La hora de fin debe ser después de la hora de inicio.');
       return;
@@ -789,7 +801,7 @@ export default function AdminHome() {
         requires_approval: false,
         forced: true,
         notes: manualNotes.trim() || null,
-        clase: manualClase.trim(),
+        clase: manualClase.trim() || null,
       });
 
       if (insertError) {
@@ -814,6 +826,179 @@ export default function AdminHome() {
     } finally {
       setManualSubmitting(false);
     }
+  }
+
+  // ---------- Modal de "Por semana": crear, editar, mover, eliminar ----------
+
+  function openWeekCreateModal(dayDate) {
+    setWeekModalMode('create');
+    setWeekModalReservationId(null);
+    setWeekModalStatus(null);
+    setWeekModalEmail('@udea.edu.co');
+    setWeekModalName('');
+    setWeekModalNeedsName(false);
+    setWeekModalRoomId(weekRoomId);
+    setWeekModalDate(dayDate);
+    setWeekModalStart('08:00');
+    setWeekModalEnd('10:00');
+    setWeekModalClase('');
+    setWeekModalError(null);
+    setWeekModalOpen(true);
+  }
+
+  function openWeekEditModal(r) {
+    setWeekModalMode('edit');
+    setWeekModalReservationId(r.id);
+    setWeekModalStatus(r.status);
+    setWeekModalEmail(r.app_users?.email || '');
+    setWeekModalName(r.app_users?.name || '');
+    setWeekModalNeedsName(false);
+    setWeekModalRoomId(weekRoomId);
+    setWeekModalDate(r.date);
+    setWeekModalStart((r.start_time || '').slice(0, 5));
+    setWeekModalEnd((r.end_time || '').slice(0, 5));
+    setWeekModalClase(r.clase || '');
+    setWeekModalError(null);
+    setWeekModalOpen(true);
+  }
+
+  function closeWeekModal() {
+    if (weekModalSubmitting) return;
+    setWeekModalOpen(false);
+  }
+
+  async function handleWeekModalSubmit(e) {
+    e.preventDefault();
+    setWeekModalError(null);
+
+    if (!weekModalRoomId) {
+      setWeekModalError('Elige un espacio.');
+      return;
+    }
+    if (!weekModalStart || !weekModalEnd || weekModalEnd <= weekModalStart) {
+      setWeekModalError('La hora de fin debe ser después de la hora de inicio.');
+      return;
+    }
+
+    setWeekModalSubmitting(true);
+    try {
+      if (weekModalMode === 'edit') {
+        const { error: updateError } = await supabase
+          .from('reservations')
+          .update({
+            room_id: weekModalRoomId,
+            date: weekModalDate,
+            start_time: weekModalStart,
+            end_time: weekModalEnd,
+            clase: weekModalClase.trim() || null,
+          })
+          .eq('id', weekModalReservationId);
+
+        if (updateError) {
+          if (updateError.code === '23P01') {
+            setWeekModalError('Ese espacio ya está ocupado en ese horario. Elige otra fecha/hora.');
+          } else {
+            setWeekModalError(`No se pudo actualizar la reserva: ${updateError.message}`);
+          }
+          setWeekModalSubmitting(false);
+          return;
+        }
+      } else {
+        const email = weekModalEmail.trim().toLowerCase();
+        if (!EMAIL_REGEX.test(email)) {
+          setWeekModalError('Usa un correo institucional con dominio @udea.edu.co.');
+          setWeekModalSubmitting(false);
+          return;
+        }
+
+        let userId;
+        const { data: existingUser, error: findError } = await supabase
+          .from('app_users')
+          .select('id')
+          .eq('email', email)
+          .maybeSingle();
+
+        if (findError) {
+          setWeekModalError(`No se pudo buscar el usuario: ${findError.message}`);
+          setWeekModalSubmitting(false);
+          return;
+        }
+
+        if (existingUser) {
+          userId = existingUser.id;
+        } else {
+          if (!weekModalName.trim()) {
+            setWeekModalNeedsName(true);
+            setWeekModalError('Esta persona no está registrada todavía — ingresa su nombre completo.');
+            setWeekModalSubmitting(false);
+            return;
+          }
+          const { data: newUser, error: insertUserError } = await supabase
+            .from('app_users')
+            .insert({ email, name: weekModalName.trim() })
+            .select('id')
+            .single();
+          if (insertUserError) {
+            setWeekModalError(`No se pudo crear la persona: ${insertUserError.message}`);
+            setWeekModalSubmitting(false);
+            return;
+          }
+          userId = newUser.id;
+        }
+
+        const { error: insertError } = await supabase.from('reservations').insert({
+          room_id: weekModalRoomId,
+          user_id: userId,
+          date: weekModalDate,
+          start_time: weekModalStart,
+          end_time: weekModalEnd,
+          status: 'confirmada',
+          requires_approval: false,
+          forced: true,
+          clase: weekModalClase.trim() || null,
+        });
+
+        if (insertError) {
+          if (insertError.code === '23P01') {
+            setWeekModalError('Ese espacio ya está ocupado en ese horario. Elige otro horario.');
+          } else {
+            setWeekModalError(`No se pudo crear la reserva: ${insertError.message}`);
+          }
+          setWeekModalSubmitting(false);
+          return;
+        }
+      }
+
+      setWeekModalOpen(false);
+      await loadWeekReservations();
+    } catch (err) {
+      console.error('[admin] error inesperado en el modal de la semana:', err);
+      setWeekModalError('Ocurrió un error inesperado. Intenta de nuevo.');
+    } finally {
+      setWeekModalSubmitting(false);
+    }
+  }
+
+  async function handleWeekModalDelete() {
+    if (!weekModalReservationId) return;
+    if (!window.confirm('¿Cancelar esta reserva? Esta acción no se puede deshacer.')) return;
+
+    setWeekModalSubmitting(true);
+    setWeekModalError(null);
+    const { error } = await supabase
+      .from('reservations')
+      .update({ status: 'cancelada' })
+      .eq('id', weekModalReservationId);
+
+    if (error) {
+      setWeekModalError(`No se pudo cancelar la reserva: ${error.message}`);
+      setWeekModalSubmitting(false);
+      return;
+    }
+
+    setWeekModalOpen(false);
+    setWeekModalSubmitting(false);
+    await loadWeekReservations();
   }
 
   async function handleBlockRoom(e) {
@@ -1613,6 +1798,7 @@ export default function AdminHome() {
                   <th style={{ padding: 8 }}>Espacio</th>
                   <th style={{ padding: 8 }}>Fecha</th>
                   <th style={{ padding: 8 }}>Horario</th>
+                  <th style={{ padding: 8 }}>Clase</th>
                   <th style={{ padding: 8 }}>Solicitante</th>
                   <th style={{ padding: 8 }}></th>
                 </tr>
@@ -1620,7 +1806,7 @@ export default function AdminHome() {
               <tbody>
                 {pendingApprovals.length === 0 && !pendingApprovalsLoading && (
                   <tr>
-                    <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                    <td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
                       No hay solicitudes pendientes de aprobación. 🎉
                     </td>
                   </tr>
@@ -1632,6 +1818,7 @@ export default function AdminHome() {
                     <td style={{ padding: 8, fontFamily: 'monospace' }}>
                       {r.start_time?.slice(0, 5)}-{r.end_time?.slice(0, 5)}
                     </td>
+                    <td style={{ padding: 8 }}>{r.clase || '—'}</td>
                     <td style={{ padding: 8 }}>
                       {r.app_users?.name || '—'}
                       <br />
@@ -1713,12 +1900,11 @@ export default function AdminHome() {
               </div>
 
               <div style={{ marginBottom: 12 }}>
-                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Clase</label>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Clase (opcional)</label>
                 <input
                   type="text"
                   value={manualClase}
                   onChange={(e) => setManualClase(e.target.value)}
-                  required
                   placeholder="Ej: Coro, Piano nivel 2, Ensayo orquesta"
                   style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
                 />
@@ -2626,9 +2812,10 @@ export default function AdminHome() {
                   return (
                     <div
                       key={dayDate}
+                      onClick={() => openWeekCreateModal(dayDate)}
                       style={{
                         flex: 1, minWidth: 120, border: '1px solid #DBDCCF', borderRadius: 8,
-                        background: isToday ? '#FBFAF3' : '#fff', padding: 8,
+                        background: isToday ? '#FBFAF3' : '#fff', padding: 8, cursor: 'pointer',
                       }}
                     >
                       <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{WEEKDAY_LABEL[weekdayIndex]}</div>
@@ -2637,7 +2824,7 @@ export default function AdminHome() {
                       {weekLoading && <div style={{ fontSize: 11, color: '#5B6B60' }}>…</div>}
 
                       {!weekLoading && dayReservations.length === 0 && (
-                        <div style={{ fontSize: 11, color: '#5B6B60' }}>Libre</div>
+                        <div style={{ fontSize: 11, color: '#5B6B60' }}>Libre — clic para reservar</div>
                       )}
 
                       {dayReservations.map((r) => {
@@ -2645,9 +2832,13 @@ export default function AdminHome() {
                         return (
                           <div
                             key={r.id}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openWeekEditModal(r);
+                            }}
                             style={{
                               background: colors.bg, color: colors.fg, borderRadius: 6, padding: '4px 6px',
-                              marginBottom: 6, fontSize: 11,
+                              marginBottom: 6, fontSize: 11, cursor: 'pointer',
                             }}
                           >
                             <div style={{ fontFamily: 'monospace', fontWeight: 600 }}>
@@ -2667,6 +2858,198 @@ export default function AdminHome() {
                     </div>
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {weekModalOpen && (
+            <div
+              onClick={closeWeekModal}
+              style={{
+                position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+                background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center',
+                justifyContent: 'center', zIndex: 1000, padding: 16,
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  background: '#fff', borderRadius: 10, padding: 22, width: '100%', maxWidth: 440,
+                  maxHeight: '90vh', overflowY: 'auto',
+                }}
+              >
+                <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 4px' }}>
+                  {weekModalMode === 'create' ? 'Nueva reserva' : 'Editar / mover reserva'}
+                </h2>
+                <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 16px' }}>
+                  {weekModalMode === 'create'
+                    ? 'Se crea directamente confirmada en el espacio y día seleccionados.'
+                    : 'Puedes cambiar la fecha, hora, espacio o clase. También puedes cancelarla.'}
+                </p>
+
+                <form onSubmit={handleWeekModalSubmit}>
+                  {weekModalMode === 'create' && (
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Correo institucional</label>
+                        <input
+                          type="email"
+                          value={weekModalEmail}
+                          onChange={(e) => setWeekModalEmail(e.target.value)}
+                          required
+                          style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                          Nombre {weekModalNeedsName ? '(persona nueva, requerido)' : '(opcional)'}
+                        </label>
+                        <input
+                          type="text"
+                          value={weekModalName}
+                          onChange={(e) => setWeekModalName(e.target.value)}
+                          required={weekModalNeedsName}
+                          style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {weekModalMode === 'edit' && (
+                    <div style={{ marginBottom: 12, fontSize: 13 }}>
+                      <strong>{weekModalName || '—'}</strong>
+                      <br />
+                      <span style={{ color: '#5B6B60', fontSize: 12 }}>{weekModalEmail}</span>
+                      {weekModalStatus && (
+                        <span style={{ marginLeft: 8, fontSize: 11, color: '#5B6B60' }}>
+                          (estado: {STATUS_LABEL[weekModalStatus] || weekModalStatus})
+                        </span>
+                      )}
+                    </div>
+                  )}
+
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Espacio</label>
+                    <select
+                      value={weekModalRoomId}
+                      onChange={(e) => setWeekModalRoomId(e.target.value)}
+                      required
+                      style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                    >
+                      <option value="">Selecciona un espacio…</option>
+                      {ROOM_TYPE_ORDER.map((t) => {
+                        const roomsOfType = rooms.filter((r) => r.type === t);
+                        if (roomsOfType.length === 0) return null;
+                        return (
+                          <optgroup key={t} label={ROOM_TYPE_LABEL[t]}>
+                            {roomsOfType.map((r) => (
+                              <option key={r.id} value={r.id}>{r.name}</option>
+                            ))}
+                          </optgroup>
+                        );
+                      })}
+                    </select>
+                    {weekModalMode === 'edit' && (
+                      <p style={{ fontSize: 11, color: '#5B6B60', margin: '4px 0 0' }}>
+                        Cambiar el espacio y/o la fecha/hora aquí abajo mueve la reserva.
+                      </p>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Fecha</label>
+                      <input
+                        type="date"
+                        value={weekModalDate}
+                        onChange={(e) => setWeekModalDate(e.target.value)}
+                        required
+                        style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hora inicio</label>
+                      <select
+                        value={weekModalStart}
+                        onChange={(e) => setWeekModalStart(e.target.value)}
+                        required
+                        style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                      >
+                        {HALF_HOUR_OPTIONS.map((t) => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hora fin</label>
+                      <select
+                        value={weekModalEnd}
+                        onChange={(e) => setWeekModalEnd(e.target.value)}
+                        required
+                        style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                      >
+                        {HALF_HOUR_OPTIONS.map((t) => (
+                          <option key={t} value={t}>{t}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: 14 }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Clase (opcional)</label>
+                    <input
+                      type="text"
+                      value={weekModalClase}
+                      onChange={(e) => setWeekModalClase(e.target.value)}
+                      placeholder="Ej: Coro, Piano nivel 2, Ensayo orquesta"
+                      style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                    />
+                  </div>
+
+                  {weekModalError && (
+                    <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                      {weekModalError}
+                    </div>
+                  )}
+
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+                    <div>
+                      {weekModalMode === 'edit' && (
+                        <button
+                          type="button"
+                          onClick={handleWeekModalDelete}
+                          disabled={weekModalSubmitting}
+                          style={{
+                            padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #A23E33',
+                            color: '#A23E33', background: 'transparent', cursor: weekModalSubmitting ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          Eliminar reserva
+                        </button>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button
+                        type="button"
+                        onClick={closeWeekModal}
+                        disabled={weekModalSubmitting}
+                        style={{ padding: '9px 16px', fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', background: '#fff', cursor: 'pointer' }}
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={weekModalSubmitting}
+                        style={{
+                          padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #0B6E4F',
+                          background: '#0B6E4F', color: '#fff', cursor: weekModalSubmitting ? 'not-allowed' : 'pointer', opacity: weekModalSubmitting ? 0.7 : 1,
+                        }}
+                      >
+                        {weekModalSubmitting ? 'Guardando...' : weekModalMode === 'create' ? 'Crear reserva' : 'Guardar cambios'}
+                      </button>
+                    </div>
+                  </div>
+                </form>
               </div>
             </div>
           )}
