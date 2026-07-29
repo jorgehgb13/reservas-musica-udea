@@ -161,6 +161,7 @@ export default function AdminHome() {
   const [manualName, setManualName] = useState('');
   const [manualNeedsName, setManualNeedsName] = useState(false);
   const [manualRoomId, setManualRoomId] = useState('');
+  const [manualClase, setManualClase] = useState('');
   const [manualDate, setManualDate] = useState(todayStr());
   const [manualStart, setManualStart] = useState('08:00');
   const [manualEnd, setManualEnd] = useState('10:00');
@@ -284,7 +285,7 @@ export default function AdminHome() {
 
     const { data, error } = await supabase
       .from('reservations')
-      .select('id, room_id, date, start_time, end_time, status, checked_in_at, returned_at, auto_cancelled, cancel_reason, rooms ( name, type ), app_users ( name, email )')
+      .select('id, room_id, date, start_time, end_time, status, clase, checked_in_at, returned_at, auto_cancelled, cancel_reason, rooms ( name, type ), app_users ( name, email )')
       .eq('date', date)
       .neq('status', 'rechazada')
       .or('status.neq.cancelada,cancel_reason.eq.no_asistio')
@@ -356,7 +357,7 @@ export default function AdminHome() {
     const weekDates = getWeekRange(weekAnchorDate);
     const { data, error } = await supabase
       .from('reservations')
-      .select('id, date, start_time, end_time, status, app_users ( name, email )')
+      .select('id, date, start_time, end_time, status, clase, app_users ( name, email )')
       .eq('room_id', weekRoomId)
       .gte('date', weekDates[0])
       .lte('date', weekDates[6])
@@ -738,6 +739,10 @@ export default function AdminHome() {
       setManualFormError('Elige un espacio.');
       return;
     }
+    if (!manualClase.trim()) {
+      setManualFormError('Escribe el nombre de la clase.');
+      return;
+    }
     if (!manualStart || !manualEnd || manualEnd <= manualStart) {
       setManualFormError('La hora de fin debe ser después de la hora de inicio.');
       return;
@@ -784,6 +789,7 @@ export default function AdminHome() {
         requires_approval: false,
         forced: true,
         notes: manualNotes.trim() || null,
+        clase: manualClase.trim(),
       });
 
       if (insertError) {
@@ -799,6 +805,7 @@ export default function AdminHome() {
       setManualFormSuccess('Reserva creada y confirmada correctamente.');
       setManualEmail('@udea.edu.co');
       setManualName('');
+      setManualClase('');
       setManualNotes('');
       await loadReservations();
     } catch (err) {
@@ -1365,6 +1372,16 @@ export default function AdminHome() {
           Reservas del día
         </button>
         <button
+          onClick={() => setView('semana')}
+          style={{
+            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
+            border: 'none', borderBottom: view === 'semana' ? '2px solid #0B6E4F' : '2px solid transparent',
+            color: view === 'semana' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
+          }}
+        >
+          Por semana
+        </button>
+        <button
           onClick={() => setView('aprobaciones')}
           style={{
             padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
@@ -1406,16 +1423,6 @@ export default function AdminHome() {
           }}
         >
           Ocupación
-        </button>
-        <button
-          onClick={() => setView('semana')}
-          style={{
-            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
-            border: 'none', borderBottom: view === 'semana' ? '2px solid #0B6E4F' : '2px solid transparent',
-            color: view === 'semana' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
-          }}
-        >
-          Por semana
         </button>
         <button
           onClick={() => setView('sanciones')}
@@ -1494,6 +1501,7 @@ export default function AdminHome() {
                 <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
                   <th style={{ padding: 8 }}>Espacio</th>
                   <th style={{ padding: 8 }}>Horario</th>
+                  <th style={{ padding: 8 }}>Clase</th>
                   <th style={{ padding: 8 }}>Solicitante</th>
                   <th style={{ padding: 8 }}>Estado</th>
                   <th style={{ padding: 8 }}></th>
@@ -1502,7 +1510,7 @@ export default function AdminHome() {
               <tbody>
                 {reservations.length === 0 && !loadingList && (
                   <tr>
-                    <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                    <td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
                       Sin reservas para esta fecha.
                     </td>
                   </tr>
@@ -1528,6 +1536,7 @@ export default function AdminHome() {
                       <td style={{ padding: 8, fontFamily: 'monospace' }}>
                         {r.start_time?.slice(0, 5)}-{r.end_time?.slice(0, 5)}
                       </td>
+                      <td style={{ padding: 8 }}>{r.clase || '—'}</td>
                       <td style={{ padding: 8 }}>
                         {r.app_users?.name || '—'}
                         <br />
@@ -1701,6 +1710,18 @@ export default function AdminHome() {
                     );
                   })}
                 </select>
+              </div>
+
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Clase</label>
+                <input
+                  type="text"
+                  value={manualClase}
+                  onChange={(e) => setManualClase(e.target.value)}
+                  required
+                  placeholder="Ej: Coro, Piano nivel 2, Ensayo orquesta"
+                  style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                />
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
@@ -2635,6 +2656,11 @@ export default function AdminHome() {
                             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                               {r.app_users?.name || '—'}
                             </div>
+                            {r.clase && (
+                              <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>
+                                {r.clase}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
