@@ -238,6 +238,7 @@ export default function AdminHome() {
   const [weekModalOpen, setWeekModalOpen] = useState(false);
   const [weekModalMode, setWeekModalMode] = useState('create'); // 'create' | 'edit'
   const [weekModalReservationId, setWeekModalReservationId] = useState(null);
+  const [weekModalRecurringTemplateId, setWeekModalRecurringTemplateId] = useState(null);
   const [weekModalStatus, setWeekModalStatus] = useState(null);
   const [weekModalEmail, setWeekModalEmail] = useState('@udea.edu.co');
   const [weekModalName, setWeekModalName] = useState('');
@@ -403,7 +404,7 @@ export default function AdminHome() {
     const weekDates = getWeekRange(weekAnchorDate);
     const { data, error } = await supabase
       .from('reservations')
-      .select('id, date, start_time, end_time, status, clase, app_users ( name, email )')
+      .select('id, date, start_time, end_time, status, clase, recurring_template_id, app_users ( name, email )')
       .eq('room_id', weekRoomId)
       .gte('date', weekDates[0])
       .lte('date', weekDates[6])
@@ -969,6 +970,7 @@ export default function AdminHome() {
   function openWeekCreateModal(dayDate) {
     setWeekModalMode('create');
     setWeekModalReservationId(null);
+    setWeekModalRecurringTemplateId(null);
     setWeekModalStatus(null);
     setWeekModalEmail('@udea.edu.co');
     setWeekModalName('');
@@ -985,6 +987,7 @@ export default function AdminHome() {
   function openWeekEditModal(r) {
     setWeekModalMode('edit');
     setWeekModalReservationId(r.id);
+    setWeekModalRecurringTemplateId(r.recurring_template_id || null);
     setWeekModalStatus(r.status);
     setWeekModalEmail(r.app_users?.email || '');
     setWeekModalName(r.app_users?.name || '');
@@ -1115,9 +1118,9 @@ export default function AdminHome() {
     }
   }
 
-  async function handleWeekModalDelete() {
+  async function handleWeekModalDeleteOne() {
     if (!weekModalReservationId) return;
-    if (!window.confirm('¿Cancelar esta reserva? Esta acción no se puede deshacer.')) return;
+    if (!window.confirm('¿Cancelar esta reserva (solo esta fecha)? Esta acción no se puede deshacer.')) return;
 
     setWeekModalSubmitting(true);
     setWeekModalError(null);
@@ -1128,6 +1131,36 @@ export default function AdminHome() {
 
     if (error) {
       setWeekModalError(`No se pudo cancelar la reserva: ${error.message}`);
+      setWeekModalSubmitting(false);
+      return;
+    }
+
+    setWeekModalOpen(false);
+    setWeekModalSubmitting(false);
+    await loadWeekReservations();
+  }
+
+  async function handleWeekModalDeleteAllRecurring() {
+    if (!weekModalRecurringTemplateId) return;
+    if (
+      !window.confirm(
+        '¿Cancelar TODAS las reservas recurrentes de esta clase (mismo usuario, horario y espacio, en todas las fechas)? Esta acción no se puede deshacer.'
+      )
+    ) {
+      return;
+    }
+
+    setWeekModalSubmitting(true);
+    setWeekModalError(null);
+    const { error } = await supabase
+      .from('reservations')
+      .update({ status: 'cancelada' })
+      .eq('recurring_template_id', weekModalRecurringTemplateId)
+      .neq('status', 'cancelada')
+      .neq('status', 'rechazada');
+
+    if (error) {
+      setWeekModalError(`No se pudieron cancelar las reservas: ${error.message}`);
       setWeekModalSubmitting(false);
       return;
     }
@@ -3105,6 +3138,12 @@ export default function AdminHome() {
                   {weekModalMode === 'create'
                     ? 'Se crea directamente confirmada en el espacio y día seleccionados.'
                     : 'Puedes cambiar la fecha, hora, espacio o clase. También puedes cancelarla.'}
+                  {weekModalMode === 'edit' && weekModalRecurringTemplateId && (
+                    <>
+                      {' '}
+                      <strong>Esta reserva es parte de una clase recurrente</strong> — al eliminar, puedes elegir si es solo esta fecha o toda la serie.
+                    </>
+                  )}
                 </p>
 
                 <form onSubmit={handleWeekModalSubmit}>
@@ -3233,11 +3272,37 @@ export default function AdminHome() {
                   )}
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-                    <div>
-                      {weekModalMode === 'edit' && (
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      {weekModalMode === 'edit' && weekModalRecurringTemplateId && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={handleWeekModalDeleteOne}
+                            disabled={weekModalSubmitting}
+                            style={{
+                              padding: '9px 12px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: '1px solid #A23E33',
+                              color: '#A23E33', background: 'transparent', cursor: weekModalSubmitting ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            Eliminar solo esta fecha
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleWeekModalDeleteAllRecurring}
+                            disabled={weekModalSubmitting}
+                            style={{
+                              padding: '9px 12px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: '1px solid #A23E33',
+                              color: '#fff', background: '#A23E33', cursor: weekModalSubmitting ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            Eliminar todas las recurrentes
+                          </button>
+                        </>
+                      )}
+                      {weekModalMode === 'edit' && !weekModalRecurringTemplateId && (
                         <button
                           type="button"
-                          onClick={handleWeekModalDelete}
+                          onClick={handleWeekModalDeleteOne}
                           disabled={weekModalSubmitting}
                           style={{
                             padding: '9px 16px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #A23E33',
