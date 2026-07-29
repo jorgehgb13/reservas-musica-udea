@@ -114,6 +114,31 @@ function pctWidth(startTime, endTime) {
 
 const INSTRUMENT_TEMPLATE_HEADERS = ['Nombre', 'Numero de inventario'];
 
+const RECUR_DAY_OPTIONS = [
+  { code: 1, label: 'L' }, // Lunes
+  { code: 2, label: 'M' }, // Martes
+  { code: 3, label: 'W' }, // Miércoles
+  { code: 4, label: 'J' }, // Jueves
+  { code: 5, label: 'V' }, // Viernes
+  { code: 6, label: 'S' }, // Sábado
+  { code: 0, label: 'D' }, // Domingo
+];
+
+function computeOccurrences(dateFromStr, dateToStr, days) {
+  const dates = [];
+  let cursor = new Date(`${dateFromStr}T00:00:00-05:00`);
+  const end = new Date(`${dateToStr}T00:00:00-05:00`);
+  let guard = 0;
+  while (cursor <= end && guard < 2000) {
+    if (days.includes(cursor.getUTCDay())) {
+      dates.push(cursor.toISOString().slice(0, 10));
+    }
+    cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000);
+    guard += 1;
+  }
+  return dates;
+}
+
 function validateInstrumentRow(row, rowNumber) {
   const norm = {};
   for (const key of Object.keys(row)) {
@@ -168,7 +193,12 @@ export default function AdminHome() {
   const [manualNotes, setManualNotes] = useState('');
   const [manualSubmitting, setManualSubmitting] = useState(false);
   const [manualFormError, setManualFormError] = useState(null);
+  const [manualFormWarning, setManualFormWarning] = useState(null);
   const [manualFormSuccess, setManualFormSuccess] = useState(null);
+  const [manualIsRecurring, setManualIsRecurring] = useState(false);
+  const [manualRecurDays, setManualRecurDays] = useState([]);
+  const [manualRecurDateFrom, setManualRecurDateFrom] = useState(todayStr());
+  const [manualRecurDateTo, setManualRecurDateTo] = useState(todayStr());
 
   // ---------- Bloquear espacio ----------
   const [blockRoomId, setBlockRoomId] = useState('');
@@ -740,6 +770,7 @@ export default function AdminHome() {
   async function handleCreateManualReservation(e) {
     e.preventDefault();
     setManualFormError(null);
+    setManualFormWarning(null);
     setManualFormSuccess(null);
 
     const email = manualEmail.trim().toLowerCase();
@@ -758,6 +789,16 @@ export default function AdminHome() {
     if (!manualStart || !manualEnd || manualEnd <= manualStart) {
       setManualFormError('La hora de fin debe ser después de la hora de inicio.');
       return;
+    }
+    if (manualIsRecurring) {
+      if (manualRecurDays.length === 0) {
+        setManualFormError('Elige al menos un día de la semana (L, M, W, J, V, S o D).');
+        return;
+      }
+      if (!manualRecurDateFrom || !manualRecurDateTo || manualRecurDateTo < manualRecurDateFrom) {
+        setManualFormError('La fecha de fin debe ser igual o posterior a la fecha de inicio.');
+        return;
+      }
     }
 
     setManualSubmitting(true);
@@ -791,6 +832,101 @@ export default function AdminHome() {
         userId = newUser.id;
       }
 
+      if (manualIsRecurring) {
+        // ---------- Reserva recurrente ----------
+        const { data: templateData, error: templateError } = await supabase
+          .from('recurring_templates')
+          .insert({
+            room_id: manualRoomId,
+            materia: manualClase.trim() || null,
+            docente: manualName.trim() || null,
+            user_id: userId,
+            days_of_week: manualRecurDays,
+            start_time: manualStart,
+            end_time: manualEnd,
+            date_from: manualRecurDateFrom,
+            date_to: manualRecurDateTo,
+            origin: 'admin-recurrente-manual',
+          })
+          .select('id')
+          .single();
+
+        if (templateError) {
+          setManualFormError(`No se pudo crear la clase recurrente: ${templateError.message}`);
+          setManualSubmitting(false);
+          return;
+        }
+
+        const occurrences = computeOccurrences(manualRecurDateFrom, manualRecurDateTo, manualRecurDays);
+
+        // Advertencia: revisa si alguna de esas fechas ya tiene una reserva
+        // puntual o recurrente activa en ese mismo espacio y horario.
+        const { data: conflictReservations, error: conflictError } = await supabase
+          .from('reservations')
+          .select('id, date')
+          .eq('room_id', manualRoomId)
+          .eq('start_time', manualStart)
+          .eq('end_time', manualEnd)
+          .in('date', occurrences)
+          .neq('status', 'cancelada')
+          .neq('status', 'rechazada');
+
+        if (conflictError) {
+          setManualFormError(`No se pudo verificar la disponibilidad: ${conflictError.message}`);
+          setManualSubmitting(false);
+          return;
+        }
+
+        const conflictDates = new Set((conflictReservations || []).map((r) => r.date));
+        const datesToCreate = occurrences.filter((d) => !conflictDates.has(d));
+
+        let created = 0;
+        if (datesToCreate.length > 0) {
+          const newRows = datesToCreate.map((date) => ({
+            room_id: manualRoomId,
+            user_id: userId,
+            date,
+            start_time: manualStart,
+            end_time: manualEnd,
+            status: 'confirmada',
+            requires_approval: false,
+            forced: true,
+            recurring_template_id: templateData.id,
+            clase: manualClase.trim() || null,
+            notes: manualNotes.trim() || null,
+          }));
+
+          const { error: bulkInsertError } = await supabase.from('reservations').insert(newRows);
+          if (!bulkInsertError) {
+            created = newRows.length;
+          } else {
+            for (const newRow of newRows) {
+              const { error } = await supabase.from('reservations').insert(newRow);
+              if (!error) created += 1;
+            }
+          }
+        }
+
+        if (conflictDates.size === 0) {
+          setManualFormSuccess(`Clase recurrente creada correctamente: ${created} reserva(s) confirmada(s).`);
+        } else {
+          const formattedDates = [...conflictDates].sort().join(', ');
+          setManualFormWarning(
+            `⚠️ La clase recurrente se creó, con ${created} reserva(s) confirmada(s). Pero ${conflictDates.size} fecha(s) ya tenían algo reservado en ese espacio y horario (puntual o recurrente) y se omitieron: ${formattedDates}. Revísalas manualmente.`
+          );
+        }
+
+        setManualEmail('@udea.edu.co');
+        setManualName('');
+        setManualClase('');
+        setManualNotes('');
+        setManualIsRecurring(false);
+        setManualRecurDays([]);
+        await loadReservations();
+        return;
+      }
+
+      // ---------- Reserva puntual (un solo día) ----------
       const { error: insertError } = await supabase.from('reservations').insert({
         room_id: manualRoomId,
         user_id: userId,
@@ -1910,8 +2046,84 @@ export default function AdminHome() {
                 />
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
-                <div>
+              <div style={{ marginBottom: 12 }}>
+                <button
+                  type="button"
+                  onClick={() => setManualIsRecurring((v) => !v)}
+                  style={{
+                    padding: '8px 14px', fontSize: 12, fontWeight: 600, borderRadius: 6,
+                    border: manualIsRecurring ? '1px solid #0B6E4F' : '1px solid #DBDCCF',
+                    background: manualIsRecurring ? '#0B6E4F' : '#fff',
+                    color: manualIsRecurring ? '#fff' : '#1E2A22', cursor: 'pointer',
+                  }}
+                >
+                  {manualIsRecurring ? '✓ Reserva recurrente' : 'Reserva recurrente'}
+                </button>
+                {manualIsRecurring && (
+                  <p style={{ fontSize: 11, color: '#5B6B60', margin: '6px 0 0' }}>
+                    Se repite en los días elegidos, entre la fecha de inicio y la fecha de fin, con el mismo horario.
+                  </p>
+                )}
+              </div>
+
+              {manualIsRecurring ? (
+                <>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Fecha inicio</label>
+                      <input
+                        type="date"
+                        value={manualRecurDateFrom}
+                        onChange={(e) => setManualRecurDateFrom(e.target.value)}
+                        required
+                        style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Fecha fin</label>
+                      <input
+                        type="date"
+                        value={manualRecurDateTo}
+                        onChange={(e) => setManualRecurDateTo(e.target.value)}
+                        required
+                        style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                      />
+                    </div>
+                  </div>
+
+                  <div style={{ marginBottom: 12 }}>
+                    <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Días de la semana</label>
+                    <div style={{ display: 'flex', gap: 6 }}>
+                      {RECUR_DAY_OPTIONS.map((d) => {
+                        const selected = manualRecurDays.includes(d.code);
+                        return (
+                          <button
+                            key={d.code}
+                            type="button"
+                            onClick={() =>
+                              setManualRecurDays((prev) =>
+                                prev.includes(d.code) ? prev.filter((c) => c !== d.code) : [...prev, d.code]
+                              )
+                            }
+                            style={{
+                              width: 36, height: 36, borderRadius: 6, fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                              border: selected ? '1px solid #0B6E4F' : '1px solid #DBDCCF',
+                              background: selected ? '#0B6E4F' : '#fff',
+                              color: selected ? '#fff' : '#1E2A22',
+                            }}
+                          >
+                            {d.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <p style={{ fontSize: 11, color: '#5B6B60', margin: '6px 0 0' }}>
+                      L=lunes, M=martes, W=miércoles, J=jueves, V=viernes, S=sábado, D=domingo. Puedes elegir uno o varios.
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <div style={{ marginBottom: 12 }}>
                   <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Fecha</label>
                   <input
                     type="date"
@@ -1921,6 +2133,9 @@ export default function AdminHome() {
                     style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
                   />
                 </div>
+              )}
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
                 <div>
                   <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hora inicio</label>
                   <select
@@ -1965,6 +2180,11 @@ export default function AdminHome() {
                   {manualFormError}
                 </div>
               )}
+              {manualFormWarning && (
+                <div style={{ background: '#FCF3D9', border: '1px solid #E9CD70', color: '#7A5B00', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {manualFormWarning}
+                </div>
+              )}
               {manualFormSuccess && (
                 <div style={{ background: '#E4F0EA', border: '1px solid #bcd9c9', color: '#084F39', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
                   {manualFormSuccess}
@@ -1979,7 +2199,7 @@ export default function AdminHome() {
                   background: '#0B6E4F', color: '#fff', cursor: manualSubmitting ? 'not-allowed' : 'pointer', opacity: manualSubmitting ? 0.7 : 1,
                 }}
               >
-                {manualSubmitting ? 'Guardando...' : 'Crear reserva confirmada'}
+                {manualSubmitting ? 'Guardando...' : manualIsRecurring ? 'Crear clase recurrente' : 'Crear reserva confirmada'}
               </button>
             </form>
           </div>
