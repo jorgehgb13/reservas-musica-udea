@@ -180,6 +180,9 @@ export default function AdminHome() {
   const [pendingApprovalsLoading, setPendingApprovalsLoading] = useState(false);
   const [pendingApprovalsError, setPendingApprovalsError] = useState(null);
   const [pendingActionId, setPendingActionId] = useState(null);
+  const [pendingInstrumentLoans, setPendingInstrumentLoans] = useState([]);
+  const [pendingInstrumentLoansLoading, setPendingInstrumentLoansLoading] = useState(false);
+  const [pendingInstrumentLoansError, setPendingInstrumentLoansError] = useState(null);
 
   // ---------- Reserva manual (sin restricciones) ----------
   const [manualEmail, setManualEmail] = useState('@udea.edu.co');
@@ -375,6 +378,30 @@ export default function AdminHome() {
   useEffect(() => {
     if (session) loadPendingApprovals();
   }, [session, view, loadPendingApprovals]);
+
+  const loadPendingInstrumentLoans = useCallback(async () => {
+    setPendingInstrumentLoansLoading(true);
+    setPendingInstrumentLoansError(null);
+    const { data, error } = await supabase
+      .from('instrument_reservations')
+      .select('id, date, start_time, end_time, status, instruments ( name, inventory_number ), app_users ( name, email )')
+      .eq('status', 'pendiente')
+      .order('date', { ascending: true })
+      .order('start_time', { ascending: true });
+
+    if (error) {
+      console.error('[admin] error cargando préstamos pendientes:', error);
+      setPendingInstrumentLoansError(`No se pudieron cargar los préstamos pendientes: ${error.message}`);
+      setPendingInstrumentLoans([]);
+    } else {
+      setPendingInstrumentLoans(data || []);
+    }
+    setPendingInstrumentLoansLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (session) loadPendingInstrumentLoans();
+  }, [session, view, loadPendingInstrumentLoans]);
 
   useEffect(() => {
     if (!session) return;
@@ -1399,6 +1426,7 @@ export default function AdminHome() {
       setInstrumentLoansError(`No se pudo cancelar el préstamo: ${error.message}`);
     } else {
       await loadInstrumentLoans();
+      await loadPendingInstrumentLoans();
     }
     setInstrumentLoanActionId(null);
   }
@@ -1414,6 +1442,7 @@ export default function AdminHome() {
       setInstrumentLoansError(`No se pudo aprobar el préstamo: ${error.message}`);
     } else {
       await loadInstrumentLoans();
+      await loadPendingInstrumentLoans();
     }
     setInstrumentLoanActionId(null);
   }
@@ -1429,6 +1458,7 @@ export default function AdminHome() {
       setInstrumentLoansError(`No se pudo rechazar el préstamo: ${error.message}`);
     } else {
       await loadInstrumentLoans();
+      await loadPendingInstrumentLoans();
     }
     setInstrumentLoanActionId(null);
   }
@@ -1775,16 +1805,16 @@ export default function AdminHome() {
           }}
         >
           Aprobaciones
-          {pendingApprovals.length > 0 && (
+          {(pendingApprovals.length + pendingInstrumentLoans.length) > 0 && (
             <span
               style={{
                 background: '#A23E33', color: '#fff', fontSize: 11, fontWeight: 700,
                 minWidth: 18, height: 18, borderRadius: 9, display: 'inline-flex',
                 alignItems: 'center', justifyContent: 'center', padding: '0 5px',
               }}
-              title={`${pendingApprovals.length} solicitud(es) pendiente(s) de aprobación`}
+              title={`${pendingApprovals.length + pendingInstrumentLoans.length} solicitud(es) pendiente(s) de aprobación`}
             >
-              {pendingApprovals.length}
+              {pendingApprovals.length + pendingInstrumentLoans.length}
             </span>
           )}
         </button>
@@ -2031,6 +2061,66 @@ export default function AdminHome() {
                       <button onClick={() => handlePendingReject(r.id)} disabled={pendingActionId === r.id}
                         style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #A23E33', color: '#A23E33', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}>
                         {pendingActionId === r.id ? '...' : 'Rechazar'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '28px 0 10px' }}>Préstamos de instrumentos</h2>
+          <p style={{ fontSize: 13, color: '#5B6B60', marginBottom: 16 }}>
+            Todos los préstamos de instrumentos que están esperando tu aprobación, sin importar la fecha.
+          </p>
+
+          {pendingInstrumentLoansError && (
+            <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+              {pendingInstrumentLoansError}
+            </div>
+          )}
+
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead>
+                <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
+                  <th style={{ padding: 8 }}>Instrumento</th>
+                  <th style={{ padding: 8 }}>Inventario</th>
+                  <th style={{ padding: 8 }}>Fecha</th>
+                  <th style={{ padding: 8 }}>Horario</th>
+                  <th style={{ padding: 8 }}>Solicitante</th>
+                  <th style={{ padding: 8 }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pendingInstrumentLoans.length === 0 && !pendingInstrumentLoansLoading && (
+                  <tr>
+                    <td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                      No hay préstamos de instrumentos pendientes de aprobación. 🎉
+                    </td>
+                  </tr>
+                )}
+                {pendingInstrumentLoans.map((loan) => (
+                  <tr key={loan.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
+                    <td style={{ padding: 8 }}>{loan.instruments?.name || '—'}</td>
+                    <td style={{ padding: 8, fontFamily: 'monospace' }}>{loan.instruments?.inventory_number || '—'}</td>
+                    <td style={{ padding: 8 }}>{loan.date}</td>
+                    <td style={{ padding: 8, fontFamily: 'monospace' }}>
+                      {loan.start_time?.slice(0, 5)}-{loan.end_time?.slice(0, 5)}
+                    </td>
+                    <td style={{ padding: 8 }}>
+                      {loan.app_users?.name || '—'}
+                      <br />
+                      <span style={{ color: '#5B6B60', fontSize: 11 }}>{loan.app_users?.email}</span>
+                    </td>
+                    <td style={{ padding: 8, whiteSpace: 'nowrap' }}>
+                      <button onClick={() => handleApproveInstrumentLoan(loan.id)} disabled={instrumentLoanActionId === loan.id}
+                        style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #0B6E4F', color: '#0B6E4F', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}>
+                        {instrumentLoanActionId === loan.id ? '...' : 'Aprobar'}
+                      </button>
+                      <button onClick={() => handleRejectInstrumentLoan(loan.id)} disabled={instrumentLoanActionId === loan.id}
+                        style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #A23E33', color: '#A23E33', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}>
+                        {instrumentLoanActionId === loan.id ? '...' : 'Rechazar'}
                       </button>
                     </td>
                   </tr>
