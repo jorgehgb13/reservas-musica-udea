@@ -53,6 +53,15 @@ export default function Home() {
           Cancelar mi reserva
         </a>
         <a
+          href="/mis-reservas"
+          style={{
+            padding: 10, fontSize: 13, borderRadius: 8, border: '1px solid #DBDCCF',
+            background: '#fff', color: '#16241C', textDecoration: 'none', display: 'block', boxSizing: 'border-box',
+          }}
+        >
+          Mis reservas de la semana
+        </a>
+        <a
           href="/admin/login"
           style={{
             padding: 10, fontSize: 13, borderRadius: 8, border: '1px solid transparent',
