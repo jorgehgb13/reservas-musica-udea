@@ -590,7 +590,7 @@ export default function AdminHome() {
     setInstrumentLoansError(null);
     const { data, error } = await supabase
       .from('instrument_reservations')
-      .select('id, date, start_time, end_time, status, instruments ( name ), app_users ( name, email )')
+      .select('id, date, start_time, end_time, status, instruments ( name, inventory_number ), app_users ( name, email )')
       .eq('date', instrumentLoansDate)
       .neq('status', 'cancelada')
       .order('start_time', { ascending: true });
@@ -1397,6 +1397,36 @@ export default function AdminHome() {
     if (error) {
       console.error('[admin] error cancelando préstamo:', error);
       setInstrumentLoansError(`No se pudo cancelar el préstamo: ${error.message}`);
+    } else {
+      await loadInstrumentLoans();
+    }
+    setInstrumentLoanActionId(null);
+  }
+
+  async function handleApproveInstrumentLoan(id) {
+    setInstrumentLoanActionId(id);
+    const { error } = await supabase
+      .from('instrument_reservations')
+      .update({ status: 'confirmada' })
+      .eq('id', id);
+    if (error) {
+      console.error('[admin] error aprobando préstamo:', error);
+      setInstrumentLoansError(`No se pudo aprobar el préstamo: ${error.message}`);
+    } else {
+      await loadInstrumentLoans();
+    }
+    setInstrumentLoanActionId(null);
+  }
+
+  async function handleRejectInstrumentLoan(id) {
+    setInstrumentLoanActionId(id);
+    const { error } = await supabase
+      .from('instrument_reservations')
+      .update({ status: 'rechazada' })
+      .eq('id', id);
+    if (error) {
+      console.error('[admin] error rechazando préstamo:', error);
+      setInstrumentLoansError(`No se pudo rechazar el préstamo: ${error.message}`);
     } else {
       await loadInstrumentLoans();
     }
@@ -2633,6 +2663,7 @@ export default function AdminHome() {
                 <thead>
                   <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
                     <th style={{ padding: 8 }}>Instrumento</th>
+                    <th style={{ padding: 8 }}>Inventario</th>
                     <th style={{ padding: 8 }}>Horario</th>
                     <th style={{ padding: 8 }}>Solicitante</th>
                     <th style={{ padding: 8 }}>Estado</th>
@@ -2642,7 +2673,7 @@ export default function AdminHome() {
                 <tbody>
                   {instrumentLoans.length === 0 && !instrumentLoansLoading && (
                     <tr>
-                      <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                      <td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
                         Sin préstamos reservados para esta fecha.
                       </td>
                     </tr>
@@ -2652,6 +2683,7 @@ export default function AdminHome() {
                     return (
                       <tr key={loan.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
                         <td style={{ padding: 8 }}>{loan.instruments?.name || '—'}</td>
+                        <td style={{ padding: 8, fontFamily: 'monospace' }}>{loan.instruments?.inventory_number || '—'}</td>
                         <td style={{ padding: 8, fontFamily: 'monospace' }}>
                           {loan.start_time?.slice(0, 5)}-{loan.end_time?.slice(0, 5)}
                         </td>
@@ -2666,13 +2698,33 @@ export default function AdminHome() {
                           </span>
                         </td>
                         <td style={{ padding: 8 }}>
-                          <button
-                            onClick={() => handleCancelInstrumentLoan(loan.id)}
-                            disabled={instrumentLoanActionId === loan.id}
-                            style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #A23E33', color: '#A23E33', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
-                          >
-                            {instrumentLoanActionId === loan.id ? '...' : 'Cancelar'}
-                          </button>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {loan.status === 'pendiente' && (
+                              <>
+                                <button
+                                  onClick={() => handleApproveInstrumentLoan(loan.id)}
+                                  disabled={instrumentLoanActionId === loan.id}
+                                  style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #0B6E4F', color: '#fff', background: '#0B6E4F', borderRadius: 6, cursor: 'pointer' }}
+                                >
+                                  {instrumentLoanActionId === loan.id ? '...' : 'Aprobar'}
+                                </button>
+                                <button
+                                  onClick={() => handleRejectInstrumentLoan(loan.id)}
+                                  disabled={instrumentLoanActionId === loan.id}
+                                  style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #A23E33', color: '#A23E33', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
+                                >
+                                  Rechazar
+                                </button>
+                              </>
+                            )}
+                            <button
+                              onClick={() => handleCancelInstrumentLoan(loan.id)}
+                              disabled={instrumentLoanActionId === loan.id}
+                              style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #A23E33', color: '#A23E33', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
+                            >
+                              {instrumentLoanActionId === loan.id ? '...' : 'Cancelar'}
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     );

@@ -1,6 +1,7 @@
 // Ruta de servidor: confirma el código de verificación de 6 dígitos del
-// préstamo de instrumento. Si coincide y no ha expirado, pasa directo a
-// "confirmada" — los instrumentos no requieren aprobación del administrador.
+// préstamo de instrumento. Si coincide y no ha expirado, pasa a "pendiente"
+// — todos los préstamos de instrumentos requieren aprobación del
+// administrador antes de quedar confirmados.
 
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
@@ -44,7 +45,7 @@ export async function POST(request) {
 
     const { error: updateError } = await supabaseAdmin
       .from('instrument_reservations')
-      .update({ status: 'confirmada' })
+      .update({ status: 'pendiente' })
       .eq('id', reservationId);
 
     if (updateError) {

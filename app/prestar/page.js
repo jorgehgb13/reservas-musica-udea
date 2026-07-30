@@ -144,6 +144,13 @@ export default function PrestarInstrumento() {
   }, [step, instrumentId, date]);
 
   const end = start ? addMinutes(start, duration) : null;
+  const hasConflict = start && end
+    ? busy.some((r) => {
+        const s = minsOfDay(r.start_time.slice(0, 5));
+        const e = minsOfDay(r.end_time.slice(0, 5));
+        return minsOfDay(start) < e && s < minsOfDay(end);
+      })
+    : false;
 
   // ---------- PASO 3: crear el préstamo real ----------
   async function handleCreateLoan() {
@@ -282,7 +289,7 @@ export default function PrestarInstrumento() {
         <select value={instrumentId || ''} onChange={(e) => setInstrumentId(e.target.value)}
           style={{ width: '100%', padding: 10, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14, marginBottom: 12, boxSizing: 'border-box' }}>
           {instruments.map((i) => (
-            <option key={i.id} value={i.id}>{i.name}</option>
+            <option key={i.id} value={i.id}>{i.name} — Inv. {i.inventory_number}</option>
           ))}
         </select>
 
@@ -344,12 +351,21 @@ export default function PrestarInstrumento() {
           <span><span style={{ display: 'inline-block', width: 9, height: 9, border: '2px solid #0B6E4F', borderRadius: 2, marginRight: 4 }} />Tu selección</span>
         </div>
 
+        {hasConflict && (
+          <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
+            ⚠️ Este instrumento ya está prestado en ese horario. Elige otra hora, fecha o instrumento.
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={() => setStep(1)} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
             Atrás
           </button>
-          <button onClick={() => setStep(3)}
-            style={{ flex: 1, padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: 'pointer' }}>
+          <button onClick={() => setStep(3)} disabled={hasConflict}
+            style={{
+              flex: 1, padding: 12, background: hasConflict ? '#B9C4BB' : '#0B6E4F', color: '#fff', border: 'none',
+              borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: hasConflict ? 'not-allowed' : 'pointer',
+            }}>
             Revisar y confirmar
           </button>
         </div>
@@ -364,7 +380,7 @@ export default function PrestarInstrumento() {
         <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 12 }}>Confirma tu préstamo</h1>
         <table style={{ width: '100%', marginBottom: 14, fontSize: 14 }}>
           <tbody>
-            <tr><td style={{ color: '#5B6B60', padding: '4px 0' }}>Instrumento</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{selectedInstrument?.name}</td></tr>
+            <tr><td style={{ color: '#5B6B60', padding: '4px 0' }}>Instrumento</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{selectedInstrument?.name} (Inv. {selectedInstrument?.inventory_number})</td></tr>
             <tr><td style={{ color: '#5B6B60', padding: '4px 0' }}>Fecha</td><td style={{ textAlign: 'right' }}>{date}</td></tr>
             <tr><td style={{ color: '#5B6B60', padding: '4px 0' }}>Horario</td><td style={{ textAlign: 'right' }}>{start} – {end}</td></tr>
             <tr><td style={{ color: '#5B6B60', padding: '4px 0' }}>Solicitante</td><td style={{ textAlign: 'right' }}>{name}</td></tr>
@@ -377,7 +393,7 @@ export default function PrestarInstrumento() {
           </div>
         )}
         <div style={{ background: '#E4F0EA', border: '1px solid #bfe0cf', color: '#084F39', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 18 }}>
-          El préstamo solo queda en firme si tu correo está activo y confirmas el código que te enviaremos.
+          El préstamo solo queda registrado si tu correo está activo y confirmas el código que te enviaremos. Luego, un administrador debe aprobarlo antes de que quede en firme.
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
@@ -449,10 +465,11 @@ export default function PrestarInstrumento() {
   // step === 5: éxito final
   return (
     <main style={{ maxWidth: 400, margin: '60px auto 0', padding: '0 16px', textAlign: 'center' }}>
-      <div style={{ fontSize: 34 }}>✅</div>
-      <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 19, margin: '8px 0 6px' }}>Préstamo confirmado</h1>
+      <div style={{ fontSize: 34 }}>⏳</div>
+      <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 19, margin: '8px 0 6px' }}>Préstamo registrado — pendiente de aprobación</h1>
       <p style={{ color: '#5B6B60', fontSize: 13, marginBottom: 18 }}>
-        Tu préstamo quedó confirmado. Recuerda recogerlo en el horario indicado.
+        Tu correo quedó verificado y tu préstamo está pendiente de aprobación por parte del administrador. Te
+        recomendamos confirmar antes de ir a recogerlo.
       </p>
       <a href="/" style={{ display: 'inline-block', padding: 12, background: '#0B6E4F', color: '#fff', borderRadius: 8, fontSize: 14, fontWeight: 600, textDecoration: 'none' }}>
         Volver al inicio
