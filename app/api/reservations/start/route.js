@@ -83,7 +83,7 @@ export async function POST(request) {
 
       const { data: roomReservations, error: resError } = await supabaseAdmin
         .from('reservations')
-        .select('date, end_time, status, rooms ( name )')
+        .select('date, end_time, status, recurring_template_id, rooms ( name )')
         .eq('user_id', userId)
         .in('status', ['confirmada', 'pendiente', 'sin_verificar']);
 
@@ -96,8 +96,12 @@ export async function POST(request) {
       }
 
       const now = new Date();
+      // Las reservas recurrentes (clases de profesores, plantillas
+      // semanales) NO cuentan para este límite de "una reserva puntual
+      // activa a la vez" — un profesor con una clase de 16 semanas puede
+      // seguir solicitando reservas puntuales normalmente.
       const active = (roomReservations || []).find(
-        (r) => new Date(`${r.date}T${r.end_time}-05:00`) > now
+        (r) => !r.recurring_template_id && new Date(`${r.date}T${r.end_time}-05:00`) > now
       );
 
       if (active) {

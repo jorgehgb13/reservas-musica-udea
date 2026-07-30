@@ -72,7 +72,7 @@ export async function POST(request) {
 
     const { data: existingActive, error: activeError } = await supabaseAdmin
       .from('reservations')
-      .select('date, end_time')
+      .select('date, start_time, end_time, recurring_template_id')
       .eq('user_id', userId)
       .in('status', ['confirmada', 'pendiente', 'sin_verificar']);
 
@@ -82,11 +82,34 @@ export async function POST(request) {
     }
 
     const now = new Date();
-    const hasActive = (existingActive || []).some((r) => new Date(`${r.date}T${r.end_time}-05:00`) > now);
-    if (hasActive) {
+
+    // Las reservas recurrentes (clases de profesores, plantillas semanales)
+    // NO cuentan para el límite de "una reserva puntual activa a la vez".
+    const hasActivePunctual = (existingActive || []).some(
+      (r) => !r.recurring_template_id && new Date(`${r.date}T${r.end_time}-05:00`) > now
+    );
+    if (hasActivePunctual) {
       return NextResponse.json(
         { ok: false, message: 'Ya tienes una reserva activa sin terminar. Espera a que termine para solicitar otra.' },
         { status: 403 }
+      );
+    }
+
+    // Sin importar si es recurrente o puntual, la nueva reserva no puede
+    // cruzarse con ninguna reserva activa que ya tenga a su nombre en esa
+    // misma fecha y horario.
+    const requestStartMin = toMinutes(start);
+    const requestEndMin = toMinutes(end);
+    const overlapsOwnReservation = (existingActive || []).some((r) => {
+      if (r.date !== date) return false;
+      const rs = toMinutes(r.start_time.slice(0, 5));
+      const re = toMinutes(r.end_time.slice(0, 5));
+      return requestStartMin < re && rs < requestEndMin;
+    });
+    if (overlapsOwnReservation) {
+      return NextResponse.json(
+        { ok: false, message: 'Ya tienes otra reserva a tu nombre que se cruza con ese horario (recurrente o puntual). Elige un horario distinto.' },
+        { status: 409 }
       );
     }
 
