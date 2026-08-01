@@ -1197,6 +1197,124 @@ export default function AdminHome() {
     await loadWeekReservations();
   }
 
+  async function handleWeekModalEditAllRecurring() {
+    if (!weekModalRecurringTemplateId) return;
+    if (!weekModalRoomId) {
+      setWeekModalError('Elige un espacio.');
+      return;
+    }
+    if (!weekModalStart || !weekModalEnd || weekModalEnd <= weekModalStart) {
+      setWeekModalError('La hora de fin debe ser después de la hora de inicio.');
+      return;
+    }
+    if (
+      !window.confirm(
+        'Esto va a cambiar el espacio, horario y/o clase en TODAS las fechas activas de esta serie recurrente (no solo la que estás viendo). ¿Continuar?'
+      )
+    ) {
+      return;
+    }
+
+    setWeekModalSubmitting(true);
+    setWeekModalError(null);
+
+    try {
+      const { data: seriesReservations, error: seriesError } = await supabase
+        .from('reservations')
+        .select('id, date')
+        .eq('recurring_template_id', weekModalRecurringTemplateId)
+        .neq('status', 'cancelada')
+        .neq('status', 'rechazada');
+
+      if (seriesError) {
+        setWeekModalError(`No se pudo leer la serie: ${seriesError.message}`);
+        setWeekModalSubmitting(false);
+        return;
+      }
+
+      const seriesDates = (seriesReservations || []).map((r) => r.date);
+      if (seriesDates.length === 0) {
+        setWeekModalError('No se encontraron fechas activas en esta serie.');
+        setWeekModalSubmitting(false);
+        return;
+      }
+
+      const { data: conflictRows, error: conflictError } = await supabase
+        .from('reservations')
+        .select('id, date')
+        .eq('room_id', weekModalRoomId)
+        .eq('start_time', weekModalStart)
+        .eq('end_time', weekModalEnd)
+        .in('date', seriesDates)
+        .neq('status', 'cancelada')
+        .neq('status', 'rechazada')
+        .neq('recurring_template_id', weekModalRecurringTemplateId);
+
+      if (conflictError) {
+        setWeekModalError(`No se pudo revisar conflictos: ${conflictError.message}`);
+        setWeekModalSubmitting(false);
+        return;
+      }
+
+      const conflictDates = new Set((conflictRows || []).map((r) => r.date));
+      const idsToUpdate = (seriesReservations || [])
+        .filter((r) => !conflictDates.has(r.date))
+        .map((r) => r.id);
+
+      if (idsToUpdate.length === 0) {
+        setWeekModalError('Ese espacio y horario ya está ocupado en todas las fechas de esta serie. Elige otro.');
+        setWeekModalSubmitting(false);
+        return;
+      }
+
+      const { error: templateUpdateError } = await supabase
+        .from('recurring_templates')
+        .update({
+          room_id: weekModalRoomId,
+          start_time: weekModalStart,
+          end_time: weekModalEnd,
+          materia: weekModalClase.trim() || null,
+        })
+        .eq('id', weekModalRecurringTemplateId);
+
+      if (templateUpdateError) {
+        setWeekModalError(`No se pudo actualizar la plantilla: ${templateUpdateError.message}`);
+        setWeekModalSubmitting(false);
+        return;
+      }
+
+      const { error: bulkUpdateError } = await supabase
+        .from('reservations')
+        .update({
+          room_id: weekModalRoomId,
+          start_time: weekModalStart,
+          end_time: weekModalEnd,
+          clase: weekModalClase.trim() || null,
+        })
+        .in('id', idsToUpdate);
+
+      if (bulkUpdateError) {
+        setWeekModalError(`No se pudieron actualizar las reservas: ${bulkUpdateError.message}`);
+        setWeekModalSubmitting(false);
+        return;
+      }
+
+      if (conflictDates.size > 0) {
+        window.alert(
+          `Se actualizaron ${idsToUpdate.length} fecha(s). ${conflictDates.size} fecha(s) no se pudieron mover porque ese espacio/horario ya estaba ocupado: ${[...conflictDates].join(', ')}.`
+        );
+      }
+
+      setWeekModalOpen(false);
+      setWeekModalSubmitting(false);
+      await loadWeekReservations();
+    } catch (err) {
+      console.error('[admin] error inesperado editando toda la serie:', err);
+      setWeekModalError('Ocurrió un error inesperado. Intenta de nuevo.');
+      setWeekModalSubmitting(false);
+    }
+  }
+
   async function handleBlockRoom(e) {
     e.preventDefault();
     setBlockError(null);
@@ -3283,7 +3401,7 @@ export default function AdminHome() {
                   {weekModalMode === 'edit' && weekModalRecurringTemplateId && (
                     <>
                       {' '}
-                      <strong>Esta reserva es parte de una clase recurrente</strong> — al eliminar, puedes elegir si es solo esta fecha o toda la serie.
+                      <strong>Esta reserva es parte de una clase recurrente.</strong> "Guardar cambios" solo afecta esta fecha. Para cambiar espacio, horario o clase en TODA la serie, ajusta los campos de abajo y usa "Aplicar a toda la serie".
                     </>
                   )}
                 </p>
@@ -3438,6 +3556,17 @@ export default function AdminHome() {
                             }}
                           >
                             Eliminar todas las recurrentes
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleWeekModalEditAllRecurring}
+                            disabled={weekModalSubmitting}
+                            style={{
+                              padding: '9px 12px', fontSize: 12, fontWeight: 600, borderRadius: 6, border: '1px solid #0B6E4F',
+                              color: '#fff', background: '#0B6E4F', cursor: weekModalSubmitting ? 'not-allowed' : 'pointer',
+                            }}
+                          >
+                            Aplicar a toda la serie
                           </button>
                         </>
                       )}
