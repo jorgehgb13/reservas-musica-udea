@@ -251,6 +251,10 @@ export default function AdminHome() {
   const [weekModalStart, setWeekModalStart] = useState('08:00');
   const [weekModalEnd, setWeekModalEnd] = useState('10:00');
   const [weekModalClase, setWeekModalClase] = useState('');
+  const [weekModalRecurDays, setWeekModalRecurDays] = useState([]);
+  const [weekModalRecurDateFrom, setWeekModalRecurDateFrom] = useState(todayStr());
+  const [weekModalRecurDateTo, setWeekModalRecurDateTo] = useState(todayStr());
+  const [weekModalRecurUserId, setWeekModalRecurUserId] = useState(null);
   const [weekModalSubmitting, setWeekModalSubmitting] = useState(false);
   const [weekModalError, setWeekModalError] = useState(null);
 
@@ -1011,7 +1015,7 @@ export default function AdminHome() {
     setWeekModalOpen(true);
   }
 
-  function openWeekEditModal(r) {
+  async function openWeekEditModal(r) {
     setWeekModalMode('edit');
     setWeekModalReservationId(r.id);
     setWeekModalRecurringTemplateId(r.recurring_template_id || null);
@@ -1024,8 +1028,29 @@ export default function AdminHome() {
     setWeekModalStart((r.start_time || '').slice(0, 5));
     setWeekModalEnd((r.end_time || '').slice(0, 5));
     setWeekModalClase(r.clase || '');
+    setWeekModalRecurDays([]);
+    setWeekModalRecurDateFrom(r.date);
+    setWeekModalRecurDateTo(r.date);
+    setWeekModalRecurUserId(null);
     setWeekModalError(null);
     setWeekModalOpen(true);
+
+    // Si es parte de una clase recurrente, trae el patrón completo
+    // (días de la semana, rango de fechas, usuario) para poder editarlo.
+    if (r.recurring_template_id) {
+      const { data: template, error } = await supabase
+        .from('recurring_templates')
+        .select('days_of_week, date_from, date_to, user_id')
+        .eq('id', r.recurring_template_id)
+        .maybeSingle();
+
+      if (!error && template) {
+        setWeekModalRecurDays(template.days_of_week || []);
+        setWeekModalRecurDateFrom(template.date_from || r.date);
+        setWeekModalRecurDateTo(template.date_to || r.date);
+        setWeekModalRecurUserId(template.user_id || null);
+      }
+    }
   }
 
   function closeWeekModal() {
@@ -1207,9 +1232,17 @@ export default function AdminHome() {
       setWeekModalError('La hora de fin debe ser después de la hora de inicio.');
       return;
     }
+    if (weekModalRecurDays.length === 0) {
+      setWeekModalError('Elige al menos un día de la semana (L, M, W, J, V, S o D).');
+      return;
+    }
+    if (!weekModalRecurDateFrom || !weekModalRecurDateTo || weekModalRecurDateTo < weekModalRecurDateFrom) {
+      setWeekModalError('La fecha de fin debe ser igual o posterior a la fecha de inicio.');
+      return;
+    }
     if (
       !window.confirm(
-        'Esto va a cambiar el espacio, horario y/o clase en TODAS las fechas activas de esta serie recurrente (no solo la que estás viendo). ¿Continuar?'
+        'Esto va a reemplazar TODA la clase recurrente (espacio, horario, clase, días de la semana y rango de fechas). Las fechas que ya no apliquen se cancelan y se crean las que falten. ¿Continuar?'
       )
     ) {
       return;
@@ -1219,54 +1252,60 @@ export default function AdminHome() {
     setWeekModalError(null);
 
     try {
-      const { data: seriesReservations, error: seriesError } = await supabase
+      const newOccurrences = computeOccurrences(weekModalRecurDateFrom, weekModalRecurDateTo, weekModalRecurDays);
+      const newOccurrenceSet = new Set(newOccurrences);
+
+      const { data: existingReservations, error: existingError } = await supabase
         .from('reservations')
         .select('id, date')
         .eq('recurring_template_id', weekModalRecurringTemplateId)
         .neq('status', 'cancelada')
         .neq('status', 'rechazada');
 
-      if (seriesError) {
-        setWeekModalError(`No se pudo leer la serie: ${seriesError.message}`);
+      if (existingError) {
+        setWeekModalError(`No se pudo leer la serie: ${existingError.message}`);
         setWeekModalSubmitting(false);
         return;
       }
 
-      const seriesDates = (seriesReservations || []).map((r) => r.date);
-      if (seriesDates.length === 0) {
-        setWeekModalError('No se encontraron fechas activas en esta serie.');
-        setWeekModalSubmitting(false);
-        return;
-      }
+      const existingByDate = new Map((existingReservations || []).map((r) => [r.date, r.id]));
 
-      const { data: conflictRows, error: conflictError } = await supabase
-        .from('reservations')
-        .select('id, date')
-        .eq('room_id', weekModalRoomId)
-        .eq('start_time', weekModalStart)
-        .eq('end_time', weekModalEnd)
-        .in('date', seriesDates)
-        .neq('status', 'cancelada')
-        .neq('status', 'rechazada')
-        .neq('recurring_template_id', weekModalRecurringTemplateId);
-
-      if (conflictError) {
-        setWeekModalError(`No se pudo revisar conflictos: ${conflictError.message}`);
-        setWeekModalSubmitting(false);
-        return;
-      }
-
-      const conflictDates = new Set((conflictRows || []).map((r) => r.date));
-      const idsToUpdate = (seriesReservations || [])
-        .filter((r) => !conflictDates.has(r.date))
+      // Fechas que ya no encajan en el nuevo patrón (días/rango) → se cancelan.
+      const idsToCancel = (existingReservations || [])
+        .filter((r) => !newOccurrenceSet.has(r.date))
         .map((r) => r.id);
 
-      if (idsToUpdate.length === 0) {
-        setWeekModalError('Ese espacio y horario ya está ocupado en todas las fechas de esta serie. Elige otro.');
-        setWeekModalSubmitting(false);
-        return;
+      // Fechas del nuevo patrón que ya existían → se actualizan (espacio/hora/clase).
+      const datesToUpdate = newOccurrences.filter((d) => existingByDate.has(d));
+      // Fechas del nuevo patrón que son nuevas → hay que crearlas.
+      const datesToCreate = newOccurrences.filter((d) => !existingByDate.has(d));
+
+      // Revisa conflictos con OTRAS reservas (de otra serie o puntuales)
+      // solo para las fechas nuevas que hay que crear.
+      let conflictDates = new Set();
+      if (datesToCreate.length > 0) {
+        const { data: conflictRows, error: conflictError } = await supabase
+          .from('reservations')
+          .select('id, date')
+          .eq('room_id', weekModalRoomId)
+          .eq('start_time', weekModalStart)
+          .eq('end_time', weekModalEnd)
+          .in('date', datesToCreate)
+          .neq('status', 'cancelada')
+          .neq('status', 'rechazada')
+          .neq('recurring_template_id', weekModalRecurringTemplateId);
+
+        if (conflictError) {
+          setWeekModalError(`No se pudo revisar conflictos: ${conflictError.message}`);
+          setWeekModalSubmitting(false);
+          return;
+        }
+        conflictDates = new Set((conflictRows || []).map((r) => r.date));
       }
 
+      const finalDatesToCreate = datesToCreate.filter((d) => !conflictDates.has(d));
+
+      // 1. Actualiza la plantilla con el nuevo patrón completo.
       const { error: templateUpdateError } = await supabase
         .from('recurring_templates')
         .update({
@@ -1274,6 +1313,9 @@ export default function AdminHome() {
           start_time: weekModalStart,
           end_time: weekModalEnd,
           materia: weekModalClase.trim() || null,
+          days_of_week: weekModalRecurDays,
+          date_from: weekModalRecurDateFrom,
+          date_to: weekModalRecurDateTo,
         })
         .eq('id', weekModalRecurringTemplateId);
 
@@ -1283,27 +1325,74 @@ export default function AdminHome() {
         return;
       }
 
-      const { error: bulkUpdateError } = await supabase
-        .from('reservations')
-        .update({
+      // 2. Cancela las fechas que ya no aplican con el nuevo patrón.
+      if (idsToCancel.length > 0) {
+        const { error: cancelError } = await supabase
+          .from('reservations')
+          .update({ status: 'cancelada', cancel_reason: 'Ajuste de patrón recurrente' })
+          .in('id', idsToCancel);
+
+        if (cancelError) {
+          setWeekModalError(`No se pudieron cancelar las fechas antiguas: ${cancelError.message}`);
+          setWeekModalSubmitting(false);
+          return;
+        }
+      }
+
+      // 3. Actualiza las fechas que ya existían y siguen aplicando.
+      const idsToUpdate = datesToUpdate.map((d) => existingByDate.get(d));
+      if (idsToUpdate.length > 0) {
+        const { error: bulkUpdateError } = await supabase
+          .from('reservations')
+          .update({
+            room_id: weekModalRoomId,
+            start_time: weekModalStart,
+            end_time: weekModalEnd,
+            clase: weekModalClase.trim() || null,
+          })
+          .in('id', idsToUpdate);
+
+        if (bulkUpdateError) {
+          setWeekModalError(`No se pudieron actualizar las fechas existentes: ${bulkUpdateError.message}`);
+          setWeekModalSubmitting(false);
+          return;
+        }
+      }
+
+      // 4. Crea las fechas nuevas del patrón que todavía no existían (sin conflicto).
+      let created = 0;
+      if (finalDatesToCreate.length > 0) {
+        const newRows = finalDatesToCreate.map((date) => ({
           room_id: weekModalRoomId,
+          user_id: weekModalRecurUserId,
+          date,
           start_time: weekModalStart,
           end_time: weekModalEnd,
+          status: 'confirmada',
+          requires_approval: false,
+          forced: true,
+          recurring_template_id: weekModalRecurringTemplateId,
           clase: weekModalClase.trim() || null,
-        })
-        .in('id', idsToUpdate);
+        }));
 
-      if (bulkUpdateError) {
-        setWeekModalError(`No se pudieron actualizar las reservas: ${bulkUpdateError.message}`);
-        setWeekModalSubmitting(false);
-        return;
+        const { error: insertError } = await supabase.from('reservations').insert(newRows);
+        if (insertError) {
+          setWeekModalError(
+            `Se actualizó la plantilla, pero no se pudieron crear algunas fechas nuevas: ${insertError.message}`
+          );
+          setWeekModalSubmitting(false);
+          await loadWeekReservations();
+          return;
+        }
+        created = newRows.length;
       }
 
-      if (conflictDates.size > 0) {
-        window.alert(
-          `Se actualizaron ${idsToUpdate.length} fecha(s). ${conflictDates.size} fecha(s) no se pudieron mover porque ese espacio/horario ya estaba ocupado: ${[...conflictDates].join(', ')}.`
-        );
-      }
+      window.alert(
+        `Serie actualizada: ${created} fecha(s) nueva(s) creada(s), ${idsToUpdate.length} fecha(s) existente(s) actualizada(s), ${idsToCancel.length} fecha(s) antigua(s) cancelada(s)` +
+          (conflictDates.size > 0
+            ? `. ${conflictDates.size} fecha(s) no se pudieron crear porque ya estaban ocupadas: ${[...conflictDates].join(', ')}.`
+            : '.')
+      );
 
       setWeekModalOpen(false);
       setWeekModalSubmitting(false);
@@ -3524,6 +3613,64 @@ export default function AdminHome() {
                       style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
                     />
                   </div>
+
+                  {weekModalMode === 'edit' && weekModalRecurringTemplateId && (
+                    <div style={{ marginBottom: 14, padding: 12, background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8 }}>
+                      <p style={{ fontSize: 12, fontWeight: 600, margin: '0 0 10px' }}>
+                        Patrón de la clase recurrente
+                      </p>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 10 }}>
+                        <div>
+                          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Fecha inicio</label>
+                          <input
+                            type="date"
+                            value={weekModalRecurDateFrom}
+                            onChange={(e) => setWeekModalRecurDateFrom(e.target.value)}
+                            style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                          />
+                        </div>
+                        <div>
+                          <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Fecha fin</label>
+                          <input
+                            type="date"
+                            value={weekModalRecurDateTo}
+                            onChange={(e) => setWeekModalRecurDateTo(e.target.value)}
+                            style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                          />
+                        </div>
+                      </div>
+                      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Días de la semana</label>
+                      <div style={{ display: 'flex', gap: 6 }}>
+                        {RECUR_DAY_OPTIONS.map((d) => {
+                          const selected = weekModalRecurDays.includes(d.code);
+                          return (
+                            <button
+                              key={d.code}
+                              type="button"
+                              onClick={() =>
+                                setWeekModalRecurDays((prev) =>
+                                  prev.includes(d.code) ? prev.filter((c) => c !== d.code) : [...prev, d.code]
+                                )
+                              }
+                              style={{
+                                width: 32, height: 32, borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                                border: selected ? '1px solid #0B6E4F' : '1px solid #DBDCCF',
+                                background: selected ? '#0B6E4F' : '#fff',
+                                color: selected ? '#fff' : '#1E2A22',
+                              }}
+                            >
+                              {d.label}
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <p style={{ fontSize: 11, color: '#5B6B60', margin: '8px 0 0' }}>
+                        Estos campos, junto con el espacio, la hora y la clase de arriba, se aplican a TODA la serie
+                        al presionar "Aplicar a toda la serie". Las fechas que dejen de encajar en el nuevo rango o
+                        días se cancelan; las que falten se crean.
+                      </p>
+                    </div>
+                  )}
 
                   {weekModalError && (
                     <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
