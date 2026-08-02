@@ -3,10 +3,31 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 
+const TYPE_META = {
+  cubiculo: { label: 'Cubículo', icon: '🎧', needsApproval: false },
+  aula: { label: 'Aula', icon: '🎹', needsApproval: true },
+};
+
+// Cubículos que, por excepción, también necesitan aprobación del
+// administrador (igual que un aula), aunque su tipo sea "cubiculo".
+const ROOM_CODES_REQUIRE_APPROVAL = ['25307', '25303'];
+
+// Avisos especiales que se muestran antes de poder enviar la reserva,
+// según el espacio elegido (uso exclusivo de un área específica).
+const ROOM_CODE_WARNINGS = {
+  '25205': 'Tenga en cuenta que esta aula es de uso exclusivo del área de Piano.',
+  '25206': 'Tenga en cuenta que esta aula es de uso exclusivo del área de Piano.',
+  '25307': 'Tenga en cuenta que este espacio es para uso exclusivo del área de percusión.',
+  '25303': 'Tenga en cuenta que este espacio es para uso exclusivo del área de percusión.',
+};
+
+function roomNeedsApproval(type, room) {
+  return !!TYPE_META[type]?.needsApproval || ROOM_CODES_REQUIRE_APPROVAL.includes(room?.code);
+}
+
 const OPERATING_START = 6;
 const OPERATING_END = 20;
 const HOUR_MARKS = Array.from({ length: OPERATING_END - OPERATING_START + 1 }, (_, i) => OPERATING_START + i);
-const MAX_DURATION_MIN = 240; // 4 horas
 
 function pad(n) {
   return n < 10 ? `0${n}` : `${n}`;
@@ -59,7 +80,7 @@ function todayStr() {
   return nowBogota().dateStr;
 }
 
-export default function PrestarInstrumento() {
+export default function Reservar() {
   const [step, setStep] = useState(1);
 
   // Paso 1
@@ -70,20 +91,31 @@ export default function PrestarInstrumento() {
   const [loading, setLoading] = useState(false);
   const [userId, setUserId] = useState(null);
 
-  // Paso 2
-  const [instruments, setInstruments] = useState([]);
-  const [instrumentId, setInstrumentId] = useState(null);
+  // Paso 2 y 3
+  const [type, setType] = useState(null);
+  const [rooms, setRooms] = useState([]);
+  const [roomId, setRoomId] = useState(null);
   const [date, setDate] = useState(todayStr());
   const [duration, setDuration] = useState(60);
   const [start, setStart] = useState('08:00');
   const [busy, setBusy] = useState([]);
   const [loadingAvailability, setLoadingAvailability] = useState(false);
 
-  // Paso 3 y 4
+  // Paso 4 y 5
   const [reservationId, setReservationId] = useState(null);
   const [codeInput, setCodeInput] = useState('');
   const [verifyError, setVerifyError] = useState(null);
   const [bounced, setBounced] = useState(false);
+  const [finalStatus, setFinalStatus] = useState(null);
+
+  // Cada vez que cambia la fecha o la duración, si la hora elegida ya no es
+  // válida (por ejemplo, quedó en el pasado si la fecha es hoy), la
+  // ajustamos a la próxima franja disponible.
+  useEffect(() => {
+    const opts = timeOptionsForDate(date, duration);
+    if (opts.length === 0) return;
+    if (!opts.includes(start)) setStart(opts[0]);
+  }, [date, duration]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---------- PASO 1 ----------
   async function handleSubmitStep1(e) {
@@ -91,13 +123,13 @@ export default function PrestarInstrumento() {
     setError(null);
 
     if (!accepted) {
-      setError('Debes confirmar que eres estudiante activo y aceptar el reglamento.');
+      setError('Debes confirmar que eres estudiante o profesor activo y aceptar el reglamento.');
       return;
     }
 
     setLoading(true);
     try {
-      const res = await fetch('/api/instruments/start', {
+      const res = await fetch('/api/reservations/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email }),
@@ -109,25 +141,6 @@ export default function PrestarInstrumento() {
         return;
       }
       setUserId(data.userId);
-
-      const { data: instrumentsData, error: fetchError } = await supabase
-        .from('instruments')
-        .select('id, name, category, inventory_number')
-        .eq('active', true)
-        .order('name', { ascending: true });
-
-      if (fetchError) {
-        setError(`No se pudo cargar la lista de instrumentos: ${fetchError.message}`);
-        setLoading(false);
-        return;
-      }
-      if (!instrumentsData || instrumentsData.length === 0) {
-        setError('No hay instrumentos disponibles por ahora.');
-        setLoading(false);
-        return;
-      }
-      setInstruments(instrumentsData);
-      setInstrumentId(instrumentsData[0].id);
       setStep(2);
     } catch (err) {
       setError(`Error de conexión: ${err.message}`);
@@ -136,17 +149,56 @@ export default function PrestarInstrumento() {
     }
   }
 
-  // ---------- PASO 2: disponibilidad real cada vez que cambia instrumento/fecha ----------
+  // ---------- PASO 2: elegir tipo ----------
+  async function selectType(t) {
+    setType(t);
+    setError(null);
+    setLoading(true);
+    try {
+      const typesToFetch = t === 'aula' ? ['aula', 'auditorio'] : [t];
+      const { data, error: fetchError } = await supabase
+        .from('rooms')
+        .select('id, code, name, type')
+        .in('type', typesToFetch)
+        .order('name', { ascending: true });
+
+      if (fetchError) {
+        setError(`No se pudo cargar la lista de espacios: ${fetchError.message}`);
+        setLoading(false);
+        return;
+      }
+      setRooms(data || []);
+      setRoomId(data && data.length ? data[0].id : null);
+      setStep(3);
+    } catch (err) {
+      setError(`Error de conexión: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // ---------- PASO 3: cargar disponibilidad real cada vez que cambian sala/fecha ----------
   useEffect(() => {
-    if (step !== 2 || !instrumentId || !date) return;
+    if (step !== 3 || !roomId || !date) return;
     let cancelled = false;
 
     async function loadAvailability() {
       setLoadingAvailability(true);
+      try {
+        await fetch('/api/reservations/expire-no-shows', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ roomId }),
+        });
+      } catch (err) {
+        // si esta llamada falla no pasa nada grave, solo se ve un poco
+        // menos al día — seguimos con la consulta de disponibilidad igual.
+      }
+
       const { data, error: fetchError } = await supabase
-        .from('instrument_reservations')
+        .from('reservations')
         .select('start_time, end_time, status')
-        .eq('instrument_id', instrumentId)
+        .eq('room_id', roomId)
         .eq('date', date)
         .in('status', ['confirmada', 'pendiente', 'sin_verificar']);
 
@@ -163,28 +215,12 @@ export default function PrestarInstrumento() {
     return () => {
       cancelled = true;
     };
-  }, [step, instrumentId, date]);
-
-  // Cada vez que cambia la fecha o la duración, si la hora elegida ya no es
-  // válida (por ejemplo, quedó en el pasado si la fecha es hoy), la
-  // ajustamos a la próxima franja disponible.
-  useEffect(() => {
-    const opts = timeOptionsForDate(date, duration);
-    if (opts.length === 0) return;
-    if (!opts.includes(start)) setStart(opts[0]);
-  }, [date, duration]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step, roomId, date]);
 
   const end = start ? addMinutes(start, duration) : null;
-  const hasConflict = start && end
-    ? busy.some((r) => {
-        const s = minsOfDay(r.start_time.slice(0, 5));
-        const e = minsOfDay(r.end_time.slice(0, 5));
-        return minsOfDay(start) < e && s < minsOfDay(end);
-      })
-    : false;
 
-  // ---------- PASO 3: crear el préstamo real ----------
-  async function handleCreateLoan() {
+  // ---------- PASO 4: crear la reserva real ----------
+  async function handleCreateReservation() {
     setError(null);
 
     const { dateStr: todayBogota, minutes: nowMin } = nowBogota();
@@ -195,14 +231,14 @@ export default function PrestarInstrumento() {
 
     setLoading(true);
     try {
-      const res = await fetch('/api/instruments/create', {
+      const res = await fetch('/api/reservations/create', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, instrumentId, date, start, end }),
+        body: JSON.stringify({ userId, roomId, roomType: type, date, start, end }),
       });
       const data = await res.json();
       if (!data.ok) {
-        setError(data.message || 'No se pudo crear el préstamo. Intenta de nuevo.');
+        setError(data.message || 'No se pudo crear la reserva. Intenta de nuevo.');
         setLoading(false);
         return;
       }
@@ -210,7 +246,7 @@ export default function PrestarInstrumento() {
       setCodeInput('');
       setVerifyError(null);
       setBounced(false);
-      setStep(4);
+      setStep(5);
     } catch (err) {
       setError(`Error de conexión: ${err.message}`);
     } finally {
@@ -218,12 +254,12 @@ export default function PrestarInstrumento() {
     }
   }
 
-  // ---------- PASO 4: verificar el código ----------
+  // ---------- PASO 5: verificar el código ----------
   async function handleVerifyCode() {
     setVerifyError(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/instruments/verify', {
+      const res = await fetch('/api/reservations/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reservationId, code: codeInput.trim() }),
@@ -234,7 +270,8 @@ export default function PrestarInstrumento() {
         setLoading(false);
         return;
       }
-      setStep(5);
+      setFinalStatus(data.status);
+      setStep(6);
     } catch (err) {
       setVerifyError(`Error de conexión: ${err.message}`);
     } finally {
@@ -245,7 +282,7 @@ export default function PrestarInstrumento() {
   async function handleSimulateBounce() {
     setLoading(true);
     try {
-      await fetch('/api/instruments/cancel', {
+      await fetch('/api/reservations/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reservationId }),
@@ -269,7 +306,7 @@ export default function PrestarInstrumento() {
         </p>
 
         <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
-          Los préstamos duran máximo 4 horas y son independientes de tus reservas de espacio.
+          Este servicio es exclusivo para estudiantes y profesores activos de la Universidad de Antioquia.
         </div>
 
         {error && (
@@ -292,42 +329,80 @@ export default function PrestarInstrumento() {
           </div>
           <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 12.5, color: '#5B6B60', marginBottom: 18 }}>
             <input type="checkbox" checked={accepted} onChange={(e) => setAccepted(e.target.checked)} style={{ marginTop: 2 }} />
-            <span>Declaro que soy estudiante o profesor activo de la Universidad de Antioquia y acepto el reglamento de préstamo de instrumentos.</span>
+            <span>Declaro que soy estudiante o profesor activo de la Universidad de Antioquia y acepto el reglamento de uso de los espacios.</span>
           </label>
           <button type="submit" disabled={loading}
             style={{ width: '100%', padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: loading ? 'default' : 'pointer', opacity: loading ? 0.7 : 1 }}>
             {loading ? 'Verificando…' : 'Continuar'}
           </button>
         </form>
-
-        <a href="/" style={{ display: 'block', textAlign: 'center', marginTop: 16, fontSize: 13, color: '#5B6B60' }}>
-          ← Volver al inicio
-        </a>
       </main>
     );
   }
 
   if (step === 2) {
-    const dayStartMin = OPERATING_START * 60;
-    const daySpan = (OPERATING_END - OPERATING_START) * 60;
-
     return (
-      <main style={{ maxWidth: 420, margin: '40px auto 0', padding: '0 16px' }}>
-        <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 4 }}>Elige el instrumento</h1>
+      <main style={{ maxWidth: 420, margin: '60px auto 0', padding: '0 16px' }}>
+        <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 4 }}>Tipo de espacio</h1>
         <p style={{ color: '#5B6B60', fontSize: 13, marginBottom: 16 }}>
-          Estos son los instrumentos disponibles ahora mismo.
+          ¿Qué necesitas, {name.split(' ')[0]}?
         </p>
         {error && (
           <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
             {error}
           </div>
         )}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {Object.keys(TYPE_META).map((t) => (
+            <button
+              key={t}
+              onClick={() => selectType(t)}
+              disabled={loading}
+              style={{ border: '1px solid #DBDCCF', borderRadius: 12, padding: 16, textAlign: 'center', background: '#fff', cursor: loading ? 'default' : 'pointer' }}
+            >
+              <div style={{ fontSize: 26, marginBottom: 6 }}>{TYPE_META[t].icon}</div>
+              <div style={{ fontSize: 13, fontWeight: 600 }}>{TYPE_META[t].label}</div>
+            </button>
+          ))}
+        </div>
+        <button onClick={() => setStep(1)} style={{ marginTop: 16, background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
+          Atrás
+        </button>
+      </main>
+    );
+  }
 
-        <label style={{ fontSize: 12, color: '#5B6B60', display: 'block', marginBottom: 4 }}>Instrumento</label>
-        <select value={instrumentId || ''} onChange={(e) => setInstrumentId(e.target.value)}
+  if (step === 3) {
+    const dayStartMin = OPERATING_START * 60;
+    const daySpan = (OPERATING_END - OPERATING_START) * 60;
+    const currentRoom = rooms.find((r) => r.id === roomId);
+
+    return (
+      <main style={{ maxWidth: 420, margin: '40px auto 0', padding: '0 16px' }}>
+        <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 4 }}>
+          {TYPE_META[type]?.label}
+        </h1>
+        {roomNeedsApproval(type, currentRoom) && (
+          <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 14 }}>
+            Tu reserva quedará en firme solo si el administrador la autoriza.
+          </div>
+        )}
+        {ROOM_CODE_WARNINGS[currentRoom?.code] && (
+          <div style={{ background: '#EAE4F5', border: '1px solid #d6c9ef', color: '#5B3FA0', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 14 }}>
+            {ROOM_CODE_WARNINGS[currentRoom.code]}
+          </div>
+        )}
+        {error && (
+          <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
+            {error}
+          </div>
+        )}
+
+        <label style={{ fontSize: 12, color: '#5B6B60', display: 'block', marginBottom: 4 }}>Elige el espacio</label>
+        <select value={roomId || ''} onChange={(e) => setRoomId(e.target.value)}
           style={{ width: '100%', padding: 10, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14, marginBottom: 12, boxSizing: 'border-box' }}>
-          {instruments.map((i) => (
-            <option key={i.id} value={i.id}>{i.name} — Inv. {i.inventory_number}</option>
+          {rooms.map((r) => (
+            <option key={r.id} value={r.id}>{r.name}</option>
           ))}
         </select>
 
@@ -343,23 +418,28 @@ export default function PrestarInstrumento() {
               const val = parseInt(e.target.value, 10);
               setDuration(val);
               const opts = timeOptionsForDate(date, val);
-              if (!opts.includes(start)) setStart(opts[0]);
+              if (!opts.includes(start)) setStart(opts[0] || start);
             }} style={{ width: '100%', padding: 10, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14, boxSizing: 'border-box' }}>
               <option value={60}>1 hora</option>
-              <option value={120}>2 horas</option>
-              <option value={180}>3 horas</option>
-              <option value={240}>4 horas (máx.)</option>
+              <option value={90}>1.5 horas</option>
+              <option value={120}>2 horas (máx.)</option>
             </select>
           </div>
         </div>
 
         <label style={{ fontSize: 12, color: '#5B6B60', display: 'block', marginBottom: 4 }}>Hora de inicio</label>
-        <select value={start} onChange={(e) => setStart(e.target.value)}
-          style={{ width: '100%', padding: 10, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14, marginBottom: 16, boxSizing: 'border-box' }}>
-          {timeOptionsForDate(date, duration).map((t) => (
-            <option key={t} value={t}>{t}</option>
-          ))}
-        </select>
+        {timeOptionsForDate(date, duration).length === 0 ? (
+          <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
+            Ya no queda ningún horario disponible hoy para esta duración. Elige otro día u otra duración.
+          </div>
+        ) : (
+          <select value={start} onChange={(e) => setStart(e.target.value)}
+            style={{ width: '100%', padding: 10, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14, marginBottom: 16, boxSizing: 'border-box' }}>
+            {timeOptionsForDate(date, duration).map((t) => (
+              <option key={t} value={t}>{t}</option>
+            ))}
+          </select>
+        )}
 
         <div style={{ fontSize: 12, color: '#5B6B60', fontWeight: 500, marginBottom: 6 }}>
           Disponibilidad {loadingAvailability ? '· cargando…' : ''}
@@ -375,9 +455,10 @@ export default function PrestarInstrumento() {
             const en = minsOfDay(r.end_time.slice(0, 5));
             const left = ((s - dayStartMin) / daySpan) * 100;
             const width = ((en - s) / daySpan) * 100;
+            const color = r.status === 'confirmada' ? '#A23E33' : '#C99B2E';
             return (
               <div key={i} title={`${r.start_time.slice(0, 5)}-${r.end_time.slice(0, 5)}`}
-                style={{ position: 'absolute', top: 0, bottom: 0, left: `${left}%`, width: `${width}%`, background: '#A23E33', borderRadius: 5 }} />
+                style={{ position: 'absolute', top: 0, bottom: 0, left: `${left}%`, width: `${width}%`, background: color, borderRadius: 5 }} />
             );
           })}
           {start && end && (
@@ -391,23 +472,19 @@ export default function PrestarInstrumento() {
         </div>
         <div style={{ display: 'flex', gap: 12, fontSize: 11, color: '#5B6B60', marginBottom: 20 }}>
           <span><span style={{ display: 'inline-block', width: 9, height: 9, background: '#A23E33', borderRadius: 2, marginRight: 4 }} />Ocupado</span>
+          <span><span style={{ display: 'inline-block', width: 9, height: 9, background: '#C99B2E', borderRadius: 2, marginRight: 4 }} />Pendiente</span>
           <span><span style={{ display: 'inline-block', width: 9, height: 9, border: '2px solid #0B6E4F', borderRadius: 2, marginRight: 4 }} />Tu selección</span>
         </div>
 
-        {hasConflict && (
-          <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
-            ⚠️ Este instrumento ya está prestado en ese horario. Elige otra hora, fecha o instrumento.
-          </div>
-        )}
-
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={() => setStep(1)} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
+          <button onClick={() => setStep(2)} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
             Atrás
           </button>
-          <button onClick={() => setStep(3)} disabled={hasConflict}
+          <button onClick={() => setStep(4)} disabled={timeOptionsForDate(date, duration).length === 0}
             style={{
-              flex: 1, padding: 12, background: hasConflict ? '#B9C4BB' : '#0B6E4F', color: '#fff', border: 'none',
-              borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: hasConflict ? 'not-allowed' : 'pointer',
+              flex: 1, padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600,
+              cursor: timeOptionsForDate(date, duration).length === 0 ? 'not-allowed' : 'pointer',
+              opacity: timeOptionsForDate(date, duration).length === 0 ? 0.6 : 1,
             }}>
             Revisar y confirmar
           </button>
@@ -416,14 +493,14 @@ export default function PrestarInstrumento() {
     );
   }
 
-  if (step === 3) {
-    const selectedInstrument = instruments.find((i) => i.id === instrumentId);
+  if (step === 4) {
+    const selectedRoom = rooms.find((r) => r.id === roomId);
     return (
       <main style={{ maxWidth: 400, margin: '60px auto 0', padding: '0 16px' }}>
-        <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 12 }}>Confirma tu préstamo</h1>
+        <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 12 }}>Confirma tu reserva</h1>
         <table style={{ width: '100%', marginBottom: 14, fontSize: 14 }}>
           <tbody>
-            <tr><td style={{ color: '#5B6B60', padding: '4px 0' }}>Instrumento</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{selectedInstrument?.name} (Inv. {selectedInstrument?.inventory_number})</td></tr>
+            <tr><td style={{ color: '#5B6B60', padding: '4px 0' }}>Espacio</td><td style={{ textAlign: 'right', fontWeight: 600 }}>{selectedRoom?.name}</td></tr>
             <tr><td style={{ color: '#5B6B60', padding: '4px 0' }}>Fecha</td><td style={{ textAlign: 'right' }}>{date}</td></tr>
             <tr><td style={{ color: '#5B6B60', padding: '4px 0' }}>Horario</td><td style={{ textAlign: 'right' }}>{start} – {end}</td></tr>
             <tr><td style={{ color: '#5B6B60', padding: '4px 0' }}>Solicitante</td><td style={{ textAlign: 'right' }}>{name}</td></tr>
@@ -435,31 +512,41 @@ export default function PrestarInstrumento() {
             {error}
           </div>
         )}
+        {roomNeedsApproval(type, selectedRoom) && (
+          <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 12 }}>
+            Su reserva quedará en firme solo si el administrador la autoriza.
+          </div>
+        )}
+        {ROOM_CODE_WARNINGS[selectedRoom?.code] && (
+          <div style={{ background: '#EAE4F5', border: '1px solid #d6c9ef', color: '#5B3FA0', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 12 }}>
+            {ROOM_CODE_WARNINGS[selectedRoom.code]}
+          </div>
+        )}
         <div style={{ background: '#E4F0EA', border: '1px solid #bfe0cf', color: '#084F39', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 18 }}>
-          El préstamo solo queda registrado si tu correo está activo y confirmas el código que te enviaremos. Luego, un administrador debe aprobarlo antes de que quede en firme.
+          La reserva solo queda en firme si tu correo está activo y confirmas el código que te enviaremos.
         </div>
 
         <div style={{ display: 'flex', gap: 10 }}>
-          <button onClick={() => setStep(2)} disabled={loading} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
+          <button onClick={() => setStep(3)} disabled={loading} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
             Atrás
           </button>
-          <button onClick={handleCreateLoan} disabled={loading}
+          <button onClick={handleCreateReservation} disabled={loading}
             style={{ flex: 1, padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, cursor: loading ? 'default' : 'pointer', opacity: loading ? 0.7 : 1 }}>
-            {loading ? 'Guardando…' : 'Confirmar préstamo'}
+            {loading ? 'Guardando…' : roomNeedsApproval(type, selectedRoom) ? 'Enviar solicitud' : 'Confirmar reserva'}
           </button>
         </div>
       </main>
     );
   }
 
-  if (step === 4) {
+  if (step === 5) {
     if (bounced) {
       return (
         <main style={{ maxWidth: 400, margin: '60px auto 0', padding: '0 16px', textAlign: 'center' }}>
           <div style={{ fontSize: 34 }}>✉️❌</div>
-          <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 19, margin: '8px 0 6px' }}>Préstamo no confirmado</h1>
+          <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 19, margin: '8px 0 6px' }}>Reserva no confirmada</h1>
           <p style={{ color: '#5B6B60', fontSize: 13, marginBottom: 18 }}>
-            Como el correo no existe (o nunca llegó el código), el préstamo no quedó en firme y el instrumento ya está
+            Como el correo no existe (o nunca llegó el código), la reserva no quedó en firme y el espacio ya está
             libre nuevamente.
           </p>
           <a href="/" style={{ display: 'inline-block', padding: 12, background: '#0B6E4F', color: '#fff', borderRadius: 8, fontSize: 14, fontWeight: 600, textDecoration: 'none' }}>
@@ -473,7 +560,7 @@ export default function PrestarInstrumento() {
       <main style={{ maxWidth: 400, margin: '60px auto 0', padding: '0 16px' }}>
         <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 20, marginBottom: 4 }}>Verifica tu correo</h1>
         <p style={{ color: '#5B6B60', fontSize: 13, marginBottom: 16 }}>
-          Te enviamos un código de 6 dígitos a <strong>{email}</strong>. Tu préstamo no queda en firme hasta que lo
+          Te enviamos un código de 6 dígitos a <strong>{email}</strong>. Tu reserva no queda en firme hasta que lo
           confirmes aquí. Tienes 10 minutos.
         </p>
         <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 16 }}>
@@ -495,7 +582,7 @@ export default function PrestarInstrumento() {
         />
         <button onClick={handleVerifyCode} disabled={loading}
           style={{ width: '100%', padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600, marginBottom: 10, cursor: loading ? 'default' : 'pointer', opacity: loading ? 0.7 : 1 }}>
-          {loading ? 'Verificando…' : 'Verificar y confirmar préstamo'}
+          {loading ? 'Verificando…' : 'Verificar y confirmar reserva'}
         </button>
         <button onClick={handleSimulateBounce} disabled={loading}
           style={{ width: '100%', padding: 8, background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: loading ? 'default' : 'pointer', textDecoration: 'underline' }}>
@@ -505,14 +592,17 @@ export default function PrestarInstrumento() {
     );
   }
 
-  // step === 5: éxito final
+  // step === 6: éxito final
   return (
     <main style={{ maxWidth: 400, margin: '60px auto 0', padding: '0 16px', textAlign: 'center' }}>
-      <div style={{ fontSize: 34 }}>⏳</div>
-      <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 19, margin: '8px 0 6px' }}>Préstamo registrado — pendiente de aprobación</h1>
+      <div style={{ fontSize: 34 }}>✅</div>
+      <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 19, margin: '8px 0 6px' }}>
+        {finalStatus === 'pendiente' ? 'Solicitud enviada' : 'Reserva confirmada'}
+      </h1>
       <p style={{ color: '#5B6B60', fontSize: 13, marginBottom: 18 }}>
-        Tu correo quedó verificado y tu préstamo está pendiente de aprobación por parte del administrador. Te
-        recomendamos confirmar antes de ir a recogerlo.
+        {finalStatus === 'pendiente'
+          ? 'Tu solicitud quedó pendiente de autorización del administrador.'
+          : 'Tu reserva quedó confirmada.'}
       </p>
       <a href="/" style={{ display: 'inline-block', padding: 12, background: '#0B6E4F', color: '#fff', borderRadius: 8, fontSize: 14, fontWeight: 600, textDecoration: 'none' }}>
         Volver al inicio
