@@ -5,6 +5,7 @@ import { supabase } from '../../lib/supabaseClient';
 
 const OPERATING_START = 6;
 const OPERATING_END = 20;
+const HOUR_MARKS = Array.from({ length: OPERATING_END - OPERATING_START + 1 }, (_, i) => OPERATING_START + i);
 const MAX_DURATION_MIN = 240; // 4 horas
 
 function pad(n) {
@@ -362,6 +363,11 @@ export default function PrestarInstrumento() {
 
         <div style={{ fontSize: 12, color: '#5B6B60', fontWeight: 500, marginBottom: 6 }}>
           Disponibilidad {loadingAvailability ? '· cargando…' : ''}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#5B6B60', marginBottom: 3 }}>
+          {HOUR_MARKS.map((h) => (
+            <span key={h}>{h}h</span>
+          ))}
         </div>
         <div style={{ position: 'relative', height: 34, background: '#EDEFE6', borderRadius: 6, marginBottom: 10 }}>
           {busy.map((r, i) => {
