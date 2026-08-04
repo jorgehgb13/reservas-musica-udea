@@ -1819,15 +1819,15 @@ export default function AdminHome() {
 
     return (
       <tr key={r.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
-        <td style={{ padding: 6, fontSize: 12.5 }}>{r.rooms?.name || '—'}</td>
+        <td style={{ padding: 6, fontSize: 12.5, wordBreak: 'break-word' }}>{r.rooms?.name || '—'}</td>
         <td style={{ padding: 6, fontFamily: 'monospace', fontSize: 12.5 }}>
           {r.start_time?.slice(0, 5)}-{r.end_time?.slice(0, 5)}
         </td>
-        <td style={{ padding: 6, fontSize: 12.5 }}>{r.clase || '—'}</td>
-        <td style={{ padding: 6, fontSize: 12.5 }}>
+        <td style={{ padding: 6, fontSize: 12.5, wordBreak: 'break-word' }}>{r.clase || '—'}</td>
+        <td style={{ padding: 6, fontSize: 12.5, wordBreak: 'break-word' }}>
           {r.app_users?.name || '—'}
           <br />
-          <span style={{ color: '#5B6B60', fontSize: 10.5 }}>{r.app_users?.email}</span>
+          <span style={{ color: '#5B6B60', fontSize: 10.5, wordBreak: 'break-word' }}>{r.app_users?.email}</span>
         </td>
         <td style={{ padding: 6 }}>
           <span style={{ background: colors.bg, color: colors.fg, fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 20 }}>
@@ -2055,15 +2055,15 @@ export default function AdminHome() {
                 Aulas y auditorio {listRoomFilter && '(filtrado)'}
               </h3>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
                   <thead>
                     <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
-                      <th style={{ padding: 6, fontSize: 11.5 }}>Espacio</th>
-                      <th style={{ padding: 6, fontSize: 11.5 }}>Horario</th>
-                      <th style={{ padding: 6, fontSize: 11.5 }}>Clase</th>
-                      <th style={{ padding: 6, fontSize: 11.5 }}>Solicitante</th>
-                      <th style={{ padding: 6, fontSize: 11.5 }}>Estado</th>
-                      <th style={{ padding: 6 }}></th>
+                      <th style={{ padding: 6, fontSize: 11.5, width: '16%' }}>Espacio</th>
+                      <th style={{ padding: 6, fontSize: 11.5, width: '13%' }}>Horario</th>
+                      <th style={{ padding: 6, fontSize: 11.5, width: '15%' }}>Clase</th>
+                      <th style={{ padding: 6, fontSize: 11.5, width: '20%' }}>Solicitante</th>
+                      <th style={{ padding: 6, fontSize: 11.5, width: '12%' }}>Estado</th>
+                      <th style={{ padding: 6, width: '24%' }}></th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2085,15 +2085,15 @@ export default function AdminHome() {
                 Cubículos {listRoomFilter && '(filtrado)'}
               </h3>
               <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, tableLayout: 'fixed' }}>
                   <thead>
                     <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
-                      <th style={{ padding: 6, fontSize: 11.5 }}>Espacio</th>
-                      <th style={{ padding: 6, fontSize: 11.5 }}>Horario</th>
-                      <th style={{ padding: 6, fontSize: 11.5 }}>Clase</th>
-                      <th style={{ padding: 6, fontSize: 11.5 }}>Solicitante</th>
-                      <th style={{ padding: 6, fontSize: 11.5 }}>Estado</th>
-                      <th style={{ padding: 6 }}></th>
+                      <th style={{ padding: 6, fontSize: 11.5, width: '16%' }}>Espacio</th>
+                      <th style={{ padding: 6, fontSize: 11.5, width: '13%' }}>Horario</th>
+                      <th style={{ padding: 6, fontSize: 11.5, width: '15%' }}>Clase</th>
+                      <th style={{ padding: 6, fontSize: 11.5, width: '20%' }}>Solicitante</th>
+                      <th style={{ padding: 6, fontSize: 11.5, width: '12%' }}>Estado</th>
+                      <th style={{ padding: 6, width: '24%' }}></th>
                     </tr>
                   </thead>
                   <tbody>
