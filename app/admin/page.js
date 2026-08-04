@@ -234,6 +234,7 @@ export default function AdminHome() {
 
   // ---------- Por semana ----------
   const [weekRoomId, setWeekRoomId] = useState('');
+  const [weekRoomQuery, setWeekRoomQuery] = useState('');
   const [weekAnchorDate, setWeekAnchorDate] = useState(todayStr());
   const [weekReservations, setWeekReservations] = useState([]);
   const [weekLoading, setWeekLoading] = useState(false);
@@ -3276,24 +3277,24 @@ export default function AdminHome() {
           <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 16 }}>
             <div>
               <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Espacio</label>
-              <select
-                value={weekRoomId}
-                onChange={(e) => setWeekRoomId(e.target.value)}
-                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13, minWidth: 220 }}
-              >
-                <option value="">Selecciona un espacio…</option>
-                {ROOM_TYPE_ORDER.map((t) => {
-                  const roomsOfType = rooms.filter((r) => r.type === t);
-                  if (roomsOfType.length === 0) return null;
-                  return (
-                    <optgroup key={t} label={ROOM_TYPE_LABEL[t]}>
-                      {roomsOfType.map((r) => (
-                        <option key={r.id} value={r.id}>{r.name}</option>
-                      ))}
-                    </optgroup>
-                  );
-                })}
-              </select>
+              <input
+                type="text"
+                list="week-rooms-datalist"
+                value={weekRoomQuery}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setWeekRoomQuery(val);
+                  const match = rooms.find((r) => r.name.toLowerCase() === val.trim().toLowerCase());
+                  setWeekRoomId(match ? match.id : '');
+                }}
+                placeholder="Escribe el número del espacio (ej: 25229)"
+                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13, minWidth: 260, boxSizing: 'border-box' }}
+              />
+              <datalist id="week-rooms-datalist">
+                {rooms.map((r) => (
+                  <option key={r.id} value={r.name} />
+                ))}
+              </datalist>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
