@@ -173,6 +173,7 @@ export default function AdminHome() {
   const [reservations, setReservations] = useState([]);
   const [loadingList, setLoadingList] = useState(false);
   const [listError, setListError] = useState(null);
+  const [listRoomFilter, setListRoomFilter] = useState('');
   const [actionId, setActionId] = useState(null);
 
   // ---------- Aprobaciones pendientes ----------
@@ -1789,8 +1790,90 @@ export default function AdminHome() {
     .slice(0, 5);
   const topInstrumentsMax = topInstruments.length > 0 ? topInstruments[0][1] : 0;
 
+  const filteredReservations = listRoomFilter
+    ? reservations.filter((r) => r.room_id === listRoomFilter)
+    : reservations;
+  const leftReservations = filteredReservations.filter((r) => r.rooms?.type === 'aula' || r.rooms?.type === 'auditorio');
+  const rightReservations = filteredReservations.filter((r) => r.rooms?.type === 'cubiculo');
+
+  function renderReservationRow(r) {
+    const canCheckIn = r.status === 'confirmada' && !r.checked_in_at;
+    const canFinish = r.status === 'confirmada' && !r.returned_at;
+    const canCancel = r.status !== 'cancelada';
+    const canApproveReject = r.status === 'pendiente';
+
+    const startDt = new Date(`${r.date}T${r.start_time}-05:00`);
+    const minutesSinceStart = (now - startDt) / 60000;
+    const isNoShow =
+      !r.checked_in_at &&
+      minutesSinceStart > 20 &&
+      (r.status === 'confirmada' || (r.status === 'cancelada' && r.cancel_reason === 'no_asistio'));
+
+    const colors = isNoShow ? { bg: '#F7E8E5', fg: '#A23E33' } : STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
+    const statusLabel = isNoShow ? 'No asistida' : STATUS_LABEL[r.status] || r.status;
+    const btnStyle = (border, color, filled) => ({
+      padding: '3px 7px', fontSize: 11, border: `1px solid ${border}`, color: filled ? '#fff' : color,
+      background: filled ? border : 'transparent', borderRadius: 5, cursor: 'pointer',
+    });
+
+    return (
+      <tr key={r.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
+        <td style={{ padding: 6, fontSize: 12.5 }}>{r.rooms?.name || '—'}</td>
+        <td style={{ padding: 6, fontFamily: 'monospace', fontSize: 12.5 }}>
+          {r.start_time?.slice(0, 5)}-{r.end_time?.slice(0, 5)}
+        </td>
+        <td style={{ padding: 6, fontSize: 12.5 }}>{r.clase || '—'}</td>
+        <td style={{ padding: 6, fontSize: 12.5 }}>
+          {r.app_users?.name || '—'}
+          <br />
+          <span style={{ color: '#5B6B60', fontSize: 10.5 }}>{r.app_users?.email}</span>
+        </td>
+        <td style={{ padding: 6 }}>
+          <span style={{ background: colors.bg, color: colors.fg, fontSize: 10.5, fontWeight: 700, padding: '2px 7px', borderRadius: 20 }}>
+            {statusLabel}
+          </span>
+          {r.checked_in_at && (
+            <div style={{ fontSize: 9.5, color: '#5B6B60', marginTop: 2 }}>asistió</div>
+          )}
+          {r.returned_at && (
+            <div style={{ fontSize: 9.5, color: '#5B6B60', marginTop: 2 }}>espacio entregado</div>
+          )}
+        </td>
+        <td style={{ padding: 6 }}>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {canApproveReject && (
+              <>
+                <button onClick={() => handleApprove(r.id)} disabled={actionId === r.id} style={btnStyle('#0B6E4F', '#0B6E4F')}>
+                  Aprobar
+                </button>
+                <button onClick={() => handleReject(r.id)} disabled={actionId === r.id} style={btnStyle('#A23E33', '#A23E33')}>
+                  Rechazar
+                </button>
+              </>
+            )}
+            {canCheckIn && (
+              <button onClick={() => handleCheckIn(r.id)} disabled={actionId === r.id} style={btnStyle('#16241C', '#16241C')}>
+                Asistió
+              </button>
+            )}
+            {canFinish && (
+              <button onClick={() => handleFinishReservation(r.id)} disabled={actionId === r.id} style={btnStyle('#5B3FA0', '#5B3FA0')}>
+                Terminar
+              </button>
+            )}
+            {canCancel && (
+              <button onClick={() => handleCancel(r.id)} disabled={actionId === r.id} style={btnStyle('#A23E33', '#A23E33')}>
+                Cancelar
+              </button>
+            )}
+          </div>
+        </td>
+      </tr>
+    );
+  }
+
   return (
-    <main style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px' }}>
+    <main style={{ maxWidth: 1400, margin: '0 auto', padding: '24px 16px' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <div>
           <h1 style={{ fontFamily: 'Georgia, serif', fontSize: 22, margin: 0 }}>Panel de administrador</h1>
@@ -1920,13 +2003,33 @@ export default function AdminHome() {
       </div>
 
       {(view === 'lista' || view === 'ocupacion') && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, flexWrap: 'wrap' }}>
           <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
             style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14 }} />
           {view === 'lista' && (
-            <span style={{ fontSize: 13, color: '#5B6B60' }}>
-              {loadingList ? 'Cargando…' : `${reservations.length} reserva(s)`}
-            </span>
+            <>
+              <select
+                value={listRoomFilter}
+                onChange={(e) => setListRoomFilter(e.target.value)}
+                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13 }}
+              >
+                <option value="">Todos los espacios</option>
+                {ROOM_TYPE_ORDER.map((t) => {
+                  const roomsOfType = rooms.filter((r) => r.type === t);
+                  if (roomsOfType.length === 0) return null;
+                  return (
+                    <optgroup key={t} label={ROOM_TYPE_LABEL[t]}>
+                      {roomsOfType.map((r) => (
+                        <option key={r.id} value={r.id}>{r.name}</option>
+                      ))}
+                    </optgroup>
+                  );
+                })}
+              </select>
+              <span style={{ fontSize: 13, color: '#5B6B60' }}>
+                {loadingList ? 'Cargando…' : `${reservations.length} reserva(s)`}
+              </span>
+            </>
           )}
         </div>
       )}
@@ -1939,101 +2042,66 @@ export default function AdminHome() {
             </div>
           )}
 
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead>
-                <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
-                  <th style={{ padding: 8 }}>Espacio</th>
-                  <th style={{ padding: 8 }}>Horario</th>
-                  <th style={{ padding: 8 }}>Clase</th>
-                  <th style={{ padding: 8 }}>Solicitante</th>
-                  <th style={{ padding: 8 }}>Estado</th>
-                  <th style={{ padding: 8 }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {reservations.length === 0 && !loadingList && (
-                  <tr>
-                    <td colSpan={6} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
-                      Sin reservas para esta fecha.
-                    </td>
-                  </tr>
-                )}
-                {reservations.map((r) => {
-                  const canCheckIn = r.status === 'confirmada' && !r.checked_in_at;
-                  const canFinish = r.status === 'confirmada' && !r.returned_at;
-                  const canCancel = r.status !== 'cancelada';
-                  const canApproveReject = r.status === 'pendiente';
-
-                  const startDt = new Date(`${r.date}T${r.start_time}-05:00`);
-                  const minutesSinceStart = (now - startDt) / 60000;
-                  const isNoShow =
-                    !r.checked_in_at &&
-                    minutesSinceStart > 20 &&
-                    (r.status === 'confirmada' || (r.status === 'cancelada' && r.cancel_reason === 'no_asistio'));
-
-                  const colors = isNoShow ? { bg: '#F7E8E5', fg: '#A23E33' } : STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
-                  const statusLabel = isNoShow ? 'No asistida' : STATUS_LABEL[r.status] || r.status;
-                  return (
-                    <tr key={r.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
-                      <td style={{ padding: 8 }}>{r.rooms?.name || '—'}</td>
-                      <td style={{ padding: 8, fontFamily: 'monospace' }}>
-                        {r.start_time?.slice(0, 5)}-{r.end_time?.slice(0, 5)}
-                      </td>
-                      <td style={{ padding: 8 }}>{r.clase || '—'}</td>
-                      <td style={{ padding: 8 }}>
-                        {r.app_users?.name || '—'}
-                        <br />
-                        <span style={{ color: '#5B6B60', fontSize: 11 }}>{r.app_users?.email}</span>
-                      </td>
-                      <td style={{ padding: 8 }}>
-                        <span style={{ background: colors.bg, color: colors.fg, fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 20 }}>
-                          {statusLabel}
-                        </span>
-                        {r.checked_in_at && (
-                          <div style={{ fontSize: 10, color: '#5B6B60', marginTop: 2 }}>asistió</div>
-                        )}
-                        {r.returned_at && (
-                          <div style={{ fontSize: 10, color: '#5B6B60', marginTop: 2 }}>espacio entregado</div>
-                        )}
-                      </td>
-                      <td style={{ padding: 8, whiteSpace: 'nowrap' }}>
-                        {canApproveReject && (
-                          <>
-                            <button onClick={() => handleApprove(r.id)} disabled={actionId === r.id}
-                              style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #0B6E4F', color: '#0B6E4F', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}>
-                              Aprobar
-                            </button>
-                            <button onClick={() => handleReject(r.id)} disabled={actionId === r.id}
-                              style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #A23E33', color: '#A23E33', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}>
-                              Rechazar
-                            </button>
-                          </>
-                        )}
-                        {canCheckIn && (
-                          <button onClick={() => handleCheckIn(r.id)} disabled={actionId === r.id}
-                            style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #16241C', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}>
-                            Confirmar asistencia
-                          </button>
-                        )}
-                        {canFinish && (
-                          <button onClick={() => handleFinishReservation(r.id)} disabled={actionId === r.id}
-                            style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #5B3FA0', color: '#5B3FA0', borderRadius: 6, background: 'transparent', cursor: 'pointer', marginRight: 6 }}>
-                            Terminar reserva
-                          </button>
-                        )}
-                        {canCancel && (
-                          <button onClick={() => handleCancel(r.id)} disabled={actionId === r.id}
-                            style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #A23E33', color: '#A23E33', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}>
-                            Cancelar
-                          </button>
-                        )}
-                      </td>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: 20 }}>
+            <div>
+              <h3 style={{ fontFamily: 'Georgia, serif', fontSize: 14, margin: '0 0 8px' }}>
+                Aulas y auditorio {listRoomFilter && '(filtrado)'}
+              </h3>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
+                      <th style={{ padding: 6, fontSize: 11.5 }}>Espacio</th>
+                      <th style={{ padding: 6, fontSize: 11.5 }}>Horario</th>
+                      <th style={{ padding: 6, fontSize: 11.5 }}>Clase</th>
+                      <th style={{ padding: 6, fontSize: 11.5 }}>Solicitante</th>
+                      <th style={{ padding: 6, fontSize: 11.5 }}>Estado</th>
+                      <th style={{ padding: 6 }}></th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                  </thead>
+                  <tbody>
+                    {leftReservations.length === 0 && !loadingList && (
+                      <tr>
+                        <td colSpan={6} style={{ padding: 16, textAlign: 'center', color: '#5B6B60', fontSize: 12.5 }}>
+                          Sin reservas de aulas o auditorio para esta fecha.
+                        </td>
+                      </tr>
+                    )}
+                    {leftReservations.map(renderReservationRow)}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div>
+              <h3 style={{ fontFamily: 'Georgia, serif', fontSize: 14, margin: '0 0 8px' }}>
+                Cubículos {listRoomFilter && '(filtrado)'}
+              </h3>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
+                      <th style={{ padding: 6, fontSize: 11.5 }}>Espacio</th>
+                      <th style={{ padding: 6, fontSize: 11.5 }}>Horario</th>
+                      <th style={{ padding: 6, fontSize: 11.5 }}>Clase</th>
+                      <th style={{ padding: 6, fontSize: 11.5 }}>Solicitante</th>
+                      <th style={{ padding: 6, fontSize: 11.5 }}>Estado</th>
+                      <th style={{ padding: 6 }}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rightReservations.length === 0 && !loadingList && (
+                      <tr>
+                        <td colSpan={6} style={{ padding: 16, textAlign: 'center', color: '#5B6B60', fontSize: 12.5 }}>
+                          Sin reservas de cubículos para esta fecha.
+                        </td>
+                      </tr>
+                    )}
+                    {rightReservations.map(renderReservationRow)}
+                  </tbody>
+                </table>
+              </div>
+            </div>
           </div>
         </>
       )}
