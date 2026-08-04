@@ -54,7 +54,7 @@ export async function POST(request) {
 
     const { data: reservations, error: resError } = await supabaseAdmin
       .from('reservations')
-      .select('id, date, start_time, end_time, status, rooms ( name, type )')
+      .select('id, date, start_time, end_time, status, verification_expires_at, rooms ( name, type )')
       .eq('user_id', user.id)
       .in('status', ['confirmada', 'pendiente', 'sin_verificar'])
       .order('created_at', { ascending: false });
@@ -74,6 +74,28 @@ export async function POST(request) {
         { ok: false, message: 'No encontramos ninguna reserva activa con ese correo.' },
         { status: 404 }
       );
+    }
+
+    // Si ya se envió un código para esta misma reserva hace poco y todavía
+    // no vence, no se manda otro correo — se reutiliza el que ya está
+    // activo. Esto evita gastar la cuota diaria de correos si alguien
+    // vuelve a enviar el formulario por impaciencia o por accidente.
+    const stillValid = active.verification_expires_at && new Date(active.verification_expires_at) > now;
+    if (stillValid) {
+      return NextResponse.json({
+        ok: true,
+        reused: true,
+        reservationId: active.id,
+        expiresAt: active.verification_expires_at,
+        reservation: {
+          roomName: active.rooms?.name || 'Espacio',
+          roomType: active.rooms?.type || null,
+          date: active.date,
+          startTime: active.start_time?.slice(0, 5),
+          endTime: active.end_time?.slice(0, 5),
+          status: active.status,
+        },
+      });
     }
 
     const code = generateCode();

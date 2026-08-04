@@ -20,6 +20,7 @@ export default function Cancelar() {
 
   const [reservationId, setReservationId] = useState(null);
   const [reservation, setReservation] = useState(null);
+  const [reused, setReused] = useState(false);
 
   const [code, setCode] = useState('');
   const [confirmError, setConfirmError] = useState(null);
@@ -43,6 +44,7 @@ export default function Cancelar() {
       }
       setReservationId(data.reservationId);
       setReservation(data.reservation);
+      setReused(!!data.reused);
       setStep(2);
     } catch (err) {
       setError('Ocurrió un error de conexión. Intenta de nuevo.');
@@ -147,7 +149,9 @@ export default function Cancelar() {
           </div>
 
           <div style={{ background: '#E4F0EA', border: '1px solid #bfe0cf', color: '#084F39', padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 12 }}>
-            Te enviamos un código de 6 dígitos a tu correo. Ingrésalo abajo para confirmar la cancelación.
+            {reused
+              ? 'Ya te habíamos enviado un código hace un momento y todavía es válido — revisa tu correo (incluida la carpeta de spam) e ingrésalo abajo.'
+              : 'Te enviamos un código de 6 dígitos a tu correo. Ingrésalo abajo para confirmar la cancelación.'}
           </div>
           <div style={{ background: '#FBF1D6', border: '1px solid #eadca0', color: '#6b5510', padding: 10, borderRadius: 8, fontSize: 12, marginBottom: 16 }}>
             Si no lo ves en unos minutos, revisa tu carpeta de spam o correo no deseado — es probable que llegue ahí.
