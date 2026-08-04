@@ -1808,7 +1808,7 @@ export default function AdminHome() {
     const minutesSinceStart = (now - startDt) / 60000;
     const isNoShow =
       !r.checked_in_at &&
-      minutesSinceStart > 20 &&
+      minutesSinceStart > 30 &&
       (r.status === 'confirmada' || (r.status === 'cancelada' && r.cancel_reason === 'no_asistio'));
 
     const colors = isNoShow ? { bg: '#F7E8E5', fg: '#A23E33' } : STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
