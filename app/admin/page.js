@@ -174,6 +174,7 @@ export default function AdminHome() {
   const [loadingList, setLoadingList] = useState(false);
   const [listError, setListError] = useState(null);
   const [listRoomFilter, setListRoomFilter] = useState('');
+  const listRoomFilterNormalized = listRoomFilter.trim().toLowerCase();
   const [actionId, setActionId] = useState(null);
 
   // ---------- Aprobaciones pendientes ----------
@@ -1790,8 +1791,8 @@ export default function AdminHome() {
     .slice(0, 5);
   const topInstrumentsMax = topInstruments.length > 0 ? topInstruments[0][1] : 0;
 
-  const filteredReservations = listRoomFilter
-    ? reservations.filter((r) => r.room_id === listRoomFilter)
+  const filteredReservations = listRoomFilterNormalized
+    ? reservations.filter((r) => (r.rooms?.name || '').toLowerCase().includes(listRoomFilterNormalized))
     : reservations;
   const leftReservations = filteredReservations.filter((r) => r.rooms?.type === 'aula' || r.rooms?.type === 'auditorio');
   const rightReservations = filteredReservations.filter((r) => r.rooms?.type === 'cubiculo');
@@ -2008,24 +2009,30 @@ export default function AdminHome() {
             style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 14 }} />
           {view === 'lista' && (
             <>
-              <select
-                value={listRoomFilter}
-                onChange={(e) => setListRoomFilter(e.target.value)}
-                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13 }}
-              >
-                <option value="">Todos los espacios</option>
-                {ROOM_TYPE_ORDER.map((t) => {
-                  const roomsOfType = rooms.filter((r) => r.type === t);
-                  if (roomsOfType.length === 0) return null;
-                  return (
-                    <optgroup key={t} label={ROOM_TYPE_LABEL[t]}>
-                      {roomsOfType.map((r) => (
-                        <option key={r.id} value={r.id}>{r.name}</option>
-                      ))}
-                    </optgroup>
-                  );
-                })}
-              </select>
+              <div style={{ position: 'relative' }}>
+                <input
+                  type="text"
+                  list="rooms-datalist"
+                  value={listRoomFilter}
+                  onChange={(e) => setListRoomFilter(e.target.value)}
+                  placeholder="Buscar espacio (ej: 25229)"
+                  style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13, width: 220 }}
+                />
+                <datalist id="rooms-datalist">
+                  {rooms.map((r) => (
+                    <option key={r.id} value={r.name} />
+                  ))}
+                </datalist>
+              </div>
+              {listRoomFilter && (
+                <button
+                  type="button"
+                  onClick={() => setListRoomFilter('')}
+                  style={{ padding: '7px 10px', fontSize: 12, border: '1px solid #DBDCCF', borderRadius: 8, background: '#fff', cursor: 'pointer' }}
+                >
+                  Quitar filtro
+                </button>
+              )}
               <span style={{ fontSize: 13, color: '#5B6B60' }}>
                 {loadingList ? 'Cargando…' : `${reservations.length} reserva(s)`}
               </span>
