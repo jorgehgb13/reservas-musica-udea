@@ -205,6 +205,18 @@ export default function AdminHome() {
   const [manualRecurDateFrom, setManualRecurDateFrom] = useState(todayStr());
   const [manualRecurDateTo, setManualRecurDateTo] = useState(todayStr());
 
+  // ---------- Préstamo manual de instrumento ----------
+  const [manualInstEmail, setManualInstEmail] = useState('@udea.edu.co');
+  const [manualInstName, setManualInstName] = useState('');
+  const [manualInstNeedsName, setManualInstNeedsName] = useState(false);
+  const [manualInstId, setManualInstId] = useState('');
+  const [manualInstDate, setManualInstDate] = useState(todayStr());
+  const [manualInstStart, setManualInstStart] = useState('08:00');
+  const [manualInstEnd, setManualInstEnd] = useState('10:00');
+  const [manualInstSubmitting, setManualInstSubmitting] = useState(false);
+  const [manualInstFormError, setManualInstFormError] = useState(null);
+  const [manualInstFormSuccess, setManualInstFormSuccess] = useState(null);
+
   // ---------- Bloquear espacio ----------
   const [blockRoomId, setBlockRoomId] = useState('');
   const [blockDateFrom, setBlockDateFrom] = useState(todayStr());
@@ -692,6 +704,32 @@ export default function AdminHome() {
       cancelled = true;
     };
   }, [manualEmail]);
+
+  useEffect(() => {
+    const email = manualInstEmail.trim().toLowerCase();
+    if (!EMAIL_REGEX.test(email)) {
+      setManualInstNeedsName(false);
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from('app_users')
+      .select('id, name')
+      .eq('email', email)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (cancelled) return;
+        if (data) {
+          setManualInstNeedsName(false);
+          setManualInstName(data.name || '');
+        } else {
+          setManualInstNeedsName(true);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [manualInstEmail]);
 
   async function handleCheckIn(id) {
     setActionId(id);
@@ -1363,6 +1401,92 @@ export default function AdminHome() {
     setLiftingId(null);
   }
 
+  async function handleCreateManualInstrumentLoan(e) {
+    e.preventDefault();
+    setManualInstFormError(null);
+    setManualInstFormSuccess(null);
+
+    const email = manualInstEmail.trim().toLowerCase();
+    if (!EMAIL_REGEX.test(email)) {
+      setManualInstFormError('Usa un correo institucional con dominio @udea.edu.co.');
+      return;
+    }
+    if (manualInstNeedsName && !manualInstName.trim()) {
+      setManualInstFormError('Esta persona no está registrada todavía — ingresa su nombre completo.');
+      return;
+    }
+    if (!manualInstId) {
+      setManualInstFormError('Elige un instrumento.');
+      return;
+    }
+    if (!manualInstStart || !manualInstEnd || manualInstEnd <= manualInstStart) {
+      setManualInstFormError('La hora de fin debe ser después de la hora de inicio.');
+      return;
+    }
+
+    setManualInstSubmitting(true);
+    try {
+      let userId;
+      const { data: existingUser, error: findError } = await supabase
+        .from('app_users')
+        .select('id')
+        .eq('email', email)
+        .maybeSingle();
+
+      if (findError) {
+        setManualInstFormError(`No se pudo buscar el usuario: ${findError.message}`);
+        setManualInstSubmitting(false);
+        return;
+      }
+
+      if (existingUser) {
+        userId = existingUser.id;
+      } else {
+        const { data: newUser, error: insertUserError } = await supabase
+          .from('app_users')
+          .insert({ email, name: manualInstName.trim() })
+          .select('id')
+          .single();
+        if (insertUserError) {
+          setManualInstFormError(`No se pudo crear la persona: ${insertUserError.message}`);
+          setManualInstSubmitting(false);
+          return;
+        }
+        userId = newUser.id;
+      }
+
+      const { error: insertError } = await supabase.from('instrument_reservations').insert({
+        instrument_id: manualInstId,
+        user_id: userId,
+        date: manualInstDate,
+        start_time: manualInstStart,
+        end_time: manualInstEnd,
+        status: 'confirmada',
+      });
+
+      if (insertError) {
+        if (insertError.code === '23P01') {
+          setManualInstFormError('Ese instrumento ya está prestado en ese horario. Elige otro horario o instrumento.');
+        } else {
+          setManualInstFormError(`No se pudo crear el préstamo: ${insertError.message}`);
+        }
+        setManualInstSubmitting(false);
+        return;
+      }
+
+      setManualInstFormSuccess('Préstamo creado y confirmado correctamente.');
+      setManualInstEmail('@udea.edu.co');
+      setManualInstName('');
+      setManualInstNeedsName(false);
+      await loadInstrumentLoans();
+    } catch (err) {
+      console.error('[admin] error inesperado creando préstamo manual:', err);
+      setManualInstFormError('Ocurrió un error inesperado. Intenta de nuevo.');
+    } finally {
+      setManualInstSubmitting(false);
+    }
+  }
+
   async function handleCreateInstrument(e) {
     e.preventDefault();
     setIFormError(null);
@@ -2016,7 +2140,13 @@ export default function AdminHome() {
                   list="rooms-datalist"
                   value={listRoomFilter}
                   onChange={(e) => setListRoomFilter(e.target.value)}
-                  placeholder="Buscar espacio (ej: 25229)"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                  placeholder="Buscar espacio y Enter (ej: 25229)"
                   style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13, width: 220 }}
                 />
                 <datalist id="rooms-datalist">
@@ -2895,10 +3025,10 @@ export default function AdminHome() {
                             {STATUS_LABEL[loan.status] || loan.status}
                           </span>
                           {loan.checked_in_at && (
-                            <div style={{ fontSize: 10, color: '#5B6B60', marginTop: 2 }}>recibido</div>
+                            <div style={{ fontSize: 10, color: '#5B6B60', marginTop: 2 }}>entregado</div>
                           )}
                           {loan.returned_at && (
-                            <div style={{ fontSize: 10, color: '#5B6B60', marginTop: 2 }}>entregado</div>
+                            <div style={{ fontSize: 10, color: '#5B6B60', marginTop: 2 }}>recibido</div>
                           )}
                         </td>
                         <td style={{ padding: 8 }}>
@@ -2927,7 +3057,7 @@ export default function AdminHome() {
                                 disabled={instrumentLoanActionId === loan.id}
                                 style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #16241C', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
                               >
-                                Recibido
+                                Entregado
                               </button>
                             )}
                             {canReturn && (
@@ -2936,7 +3066,7 @@ export default function AdminHome() {
                                 disabled={instrumentLoanActionId === loan.id}
                                 style={{ padding: '5px 10px', fontSize: 12, border: '1px solid #5B3FA0', color: '#5B3FA0', borderRadius: 6, background: 'transparent', cursor: 'pointer' }}
                               >
-                                Entregado
+                                Recibido
                               </button>
                             )}
                             <button
@@ -2954,6 +3084,116 @@ export default function AdminHome() {
                 </tbody>
               </table>
             </div>
+          </div>
+
+          <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18, marginBottom: 26 }}>
+            <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 14px' }}>Préstamo manual</h2>
+            <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 14px' }}>
+              Se crea directamente confirmado, sin necesitar código de verificación ni aprobación.
+            </p>
+
+            <form onSubmit={handleCreateManualInstrumentLoan}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Correo institucional</label>
+                  <input
+                    type="email"
+                    value={manualInstEmail}
+                    onChange={(e) => setManualInstEmail(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                    Nombre {manualInstNeedsName ? '(persona nueva, requerido)' : '(opcional)'}
+                  </label>
+                  <input
+                    type="text"
+                    value={manualInstName}
+                    onChange={(e) => setManualInstName(e.target.value)}
+                    required={manualInstNeedsName}
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 12 }}>
+                <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Instrumento</label>
+                <select
+                  value={manualInstId}
+                  onChange={(e) => setManualInstId(e.target.value)}
+                  required
+                  style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                >
+                  <option value="">Selecciona un instrumento…</option>
+                  {instruments.map((i) => (
+                    <option key={i.id} value={i.id}>{i.name} — Inv. {i.inventory_number}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Fecha</label>
+                  <input
+                    type="date"
+                    value={manualInstDate}
+                    onChange={(e) => setManualInstDate(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hora inicio</label>
+                  <select
+                    value={manualInstStart}
+                    onChange={(e) => setManualInstStart(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  >
+                    {HALF_HOUR_OPTIONS.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hora fin</label>
+                  <select
+                    value={manualInstEnd}
+                    onChange={(e) => setManualInstEnd(e.target.value)}
+                    required
+                    style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                  >
+                    {HALF_HOUR_OPTIONS.map((t) => (
+                      <option key={t} value={t}>{t}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {manualInstFormError && (
+                <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {manualInstFormError}
+                </div>
+              )}
+              {manualInstFormSuccess && (
+                <div style={{ background: '#E4F0EA', border: '1px solid #bcd9c9', color: '#084F39', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
+                  {manualInstFormSuccess}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={manualInstSubmitting}
+                style={{
+                  padding: '9px 18px', fontSize: 13, fontWeight: 600, borderRadius: 6, border: '1px solid #0B6E4F',
+                  background: '#0B6E4F', color: '#fff', cursor: manualInstSubmitting ? 'not-allowed' : 'pointer', opacity: manualInstSubmitting ? 0.7 : 1,
+                }}
+              >
+                {manualInstSubmitting ? 'Guardando...' : 'Crear préstamo confirmado'}
+              </button>
+            </form>
           </div>
 
           <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18, marginBottom: 26 }}>
@@ -3277,19 +3517,46 @@ export default function AdminHome() {
           <div style={{ display: 'flex', gap: 14, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 16 }}>
             <div>
               <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Espacio</label>
-              <input
-                type="text"
-                list="week-rooms-datalist"
-                value={weekRoomQuery}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setWeekRoomQuery(val);
-                  const match = rooms.find((r) => r.name.toLowerCase() === val.trim().toLowerCase());
-                  setWeekRoomId(match ? match.id : '');
-                }}
-                placeholder="Escribe el número del espacio (ej: 25229)"
-                style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13, minWidth: 260, boxSizing: 'border-box' }}
-              />
+              <div style={{ display: 'flex', gap: 6 }}>
+                <input
+                  type="text"
+                  list="week-rooms-datalist"
+                  value={weekRoomQuery}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setWeekRoomQuery(val);
+                    const match = rooms.find((r) => r.name.toLowerCase() === val.trim().toLowerCase());
+                    setWeekRoomId(match ? match.id : '');
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return;
+                    e.preventDefault();
+                    const q = weekRoomQuery.trim().toLowerCase();
+                    if (!q) return;
+                    const exact = rooms.find((r) => r.name.toLowerCase() === q);
+                    const partial = rooms.find((r) => r.name.toLowerCase().includes(q));
+                    const found = exact || partial;
+                    if (found) {
+                      setWeekRoomQuery(found.name);
+                      setWeekRoomId(found.id);
+                    }
+                  }}
+                  placeholder="Escribe el número del espacio y Enter (ej: 25229)"
+                  style={{ padding: 8, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 13, minWidth: 260, boxSizing: 'border-box' }}
+                />
+                {weekRoomQuery && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setWeekRoomQuery('');
+                      setWeekRoomId('');
+                    }}
+                    style={{ padding: '7px 10px', fontSize: 12, border: '1px solid #DBDCCF', borderRadius: 8, background: '#fff', cursor: 'pointer' }}
+                  >
+                    Quitar filtro
+                  </button>
+                )}
+              </div>
               <datalist id="week-rooms-datalist">
                 {rooms.map((r) => (
                   <option key={r.id} value={r.name} />
