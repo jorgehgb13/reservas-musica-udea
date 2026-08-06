@@ -7,7 +7,6 @@
 import { NextResponse } from 'next/server';
 import { supabaseAdmin } from '../../../../lib/supabaseAdmin';
 import { sendEmail, verificationEmailHtml } from '../../../../lib/email';
-import { expireNoShowReservations } from '../../../../lib/expireNoShows';
 
 const TYPE_APPROVAL = { cubiculo: false, aula: true, auditorio: true };
 // Cubículos que, por excepción, también necesitan aprobación del
@@ -50,6 +49,24 @@ export async function POST(request) {
     }
 
     const requiresApproval = !!TYPE_APPROVAL[room.type] || ROOM_CODES_REQUIRE_APPROVAL.includes(room.code);
+
+    const { data: blockRow, error: blockError } = await supabaseAdmin
+      .from('room_blocks')
+      .select('id')
+      .eq('room_id', roomId)
+      .eq('date', date)
+      .maybeSingle();
+
+    if (blockError) {
+      console.error('[reservations/create] error revisando bloqueo:', blockError);
+      return NextResponse.json({ ok: false, message: 'No se pudo verificar el espacio. Intenta de nuevo.' }, { status: 500 });
+    }
+    if (blockRow) {
+      return NextResponse.json(
+        { ok: false, message: 'Este espacio no está disponible ese día (bloqueado por el administrador). Elige otra fecha o espacio.' },
+        { status: 409 }
+      );
+    }
 
     const { data: activeSanctions, error: sanctionError } = await supabaseAdmin
       .from('sanctions')
@@ -112,12 +129,6 @@ export async function POST(request) {
         { status: 409 }
       );
     }
-
-    // Antes de revisar conflictos, liberamos cualquier reserva de este
-    // espacio que ya venció (confirmada, sin asistencia, 15+ minutos
-    // después de su hora de inicio) — así no choca con algo que en la
-    // práctica ya está libre.
-    await expireNoShowReservations(roomId);
 
     const { data: conflicts, error: conflictError } = await supabaseAdmin
       .from('reservations')

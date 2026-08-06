@@ -17,7 +17,7 @@ const ROOM_CODES_REQUIRE_APPROVAL = ['25307', '25303'];
 const ROOM_CODE_WARNINGS = {
   '25205': 'Tenga en cuenta que esta aula es de uso exclusivo del área de Piano.',
   '25206': 'Tenga en cuenta que esta aula es de uso exclusivo del área de Piano.',
-  '25307': 'Tenga en cuenta que este espacio es para uso exclusivo del área de percusión.',
+  '25307': 'Tenga en cuenta que este espacio es para uso exclusivo del área de piano.',
   '25303': 'Tenga en cuenta que este espacio es para uso exclusivo del área de percusión.',
 };
 
@@ -99,6 +99,7 @@ export default function Reservar() {
   const [duration, setDuration] = useState(60);
   const [start, setStart] = useState('08:00');
   const [busy, setBusy] = useState([]);
+  const [roomBlocked, setRoomBlocked] = useState(false);
   const [loadingAvailability, setLoadingAvailability] = useState(false);
 
   // Paso 4 y 5
@@ -184,16 +185,6 @@ export default function Reservar() {
 
     async function loadAvailability() {
       setLoadingAvailability(true);
-      try {
-        await fetch('/api/reservations/expire-no-shows', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ roomId }),
-        });
-      } catch (err) {
-        // si esta llamada falla no pasa nada grave, solo se ve un poco
-        // menos al día — seguimos con la consulta de disponibilidad igual.
-      }
 
       const { data, error: fetchError } = await supabase
         .from('reservations')
@@ -208,6 +199,17 @@ export default function Reservar() {
       } else {
         setBusy(data || []);
       }
+
+      const { data: blockData, error: blockFetchError } = await supabase
+        .from('room_blocks')
+        .select('id')
+        .eq('room_id', roomId)
+        .eq('date', date)
+        .maybeSingle();
+
+      if (cancelled) return;
+      setRoomBlocked(!blockFetchError && !!blockData);
+
       setLoadingAvailability(false);
     }
 
@@ -476,15 +478,21 @@ export default function Reservar() {
           <span><span style={{ display: 'inline-block', width: 9, height: 9, border: '2px solid #0B6E4F', borderRadius: 2, marginRight: 4 }} />Tu selección</span>
         </div>
 
+        {roomBlocked && (
+          <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
+            ⚠️ Este espacio no está disponible ese día (bloqueado por el administrador). Elige otra fecha o espacio.
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={() => setStep(2)} style={{ background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 12.5, cursor: 'pointer' }}>
             Atrás
           </button>
-          <button onClick={() => setStep(4)} disabled={timeOptionsForDate(date, duration).length === 0}
+          <button onClick={() => setStep(4)} disabled={timeOptionsForDate(date, duration).length === 0 || roomBlocked}
             style={{
               flex: 1, padding: 12, background: '#0B6E4F', color: '#fff', border: 'none', borderRadius: 8, fontSize: 14, fontWeight: 600,
-              cursor: timeOptionsForDate(date, duration).length === 0 ? 'not-allowed' : 'pointer',
-              opacity: timeOptionsForDate(date, duration).length === 0 ? 0.6 : 1,
+              cursor: (timeOptionsForDate(date, duration).length === 0 || roomBlocked) ? 'not-allowed' : 'pointer',
+              opacity: (timeOptionsForDate(date, duration).length === 0 || roomBlocked) ? 0.6 : 1,
             }}>
             Revisar y confirmar
           </button>

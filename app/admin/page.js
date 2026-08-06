@@ -225,6 +225,11 @@ export default function AdminHome() {
   const [blockSubmitting, setBlockSubmitting] = useState(false);
   const [blockError, setBlockError] = useState(null);
   const [blockResults, setBlockResults] = useState(null);
+  const [existingBlocks, setExistingBlocks] = useState([]);
+  const [existingBlocksLoading, setExistingBlocksLoading] = useState(false);
+  const [selectedBlockIds, setSelectedBlockIds] = useState([]);
+  const [cancelBlockSubmitting, setCancelBlockSubmitting] = useState(false);
+  const [cancelBlockError, setCancelBlockError] = useState(null);
 
   // ---------- Asistencia por persona ----------
   const [attFrom, setAttFrom] = useState(addDays(todayStr(), -180));
@@ -257,6 +262,7 @@ export default function AdminHome() {
   const [weekModalMode, setWeekModalMode] = useState('create'); // 'create' | 'edit'
   const [weekModalReservationId, setWeekModalReservationId] = useState(null);
   const [weekModalRecurringTemplateId, setWeekModalRecurringTemplateId] = useState(null);
+  const [weekModalEditScope, setWeekModalEditScope] = useState('single'); // 'single' | 'series'
   const [weekModalStatus, setWeekModalStatus] = useState(null);
   const [weekModalEmail, setWeekModalEmail] = useState('@udea.edu.co');
   const [weekModalName, setWeekModalName] = useState('');
@@ -341,12 +347,6 @@ export default function AdminHome() {
   const loadReservations = useCallback(async () => {
     setLoadingList(true);
     setListError(null);
-
-    try {
-      await fetch('/api/reservations/expire-no-shows', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
-    } catch (err) {
-      // si falla, seguimos igual — no es crítico para cargar la lista
-    }
 
     const { data, error } = await supabase
       .from('reservations')
@@ -746,6 +746,22 @@ export default function AdminHome() {
     setActionId(null);
   }
 
+  async function handleMarkNoShow(id) {
+    if (!window.confirm('¿Marcar esta reserva como "no asistida"? Esto libera el espacio y queda registrado en las estadísticas.')) return;
+    setActionId(id);
+    const { error } = await supabase
+      .from('reservations')
+      .update({ status: 'cancelada', cancel_reason: 'no_asistio', auto_cancelled: false })
+      .eq('id', id);
+    if (error) {
+      console.error('[admin] error marcando no asistida:', error);
+      setListError(`No se pudo marcar como no asistida: ${error.message}`);
+    } else {
+      await loadReservations();
+    }
+    setActionId(null);
+  }
+
   async function handleFinishReservation(id) {
     setActionId(id);
     const { error } = await supabase
@@ -1039,6 +1055,7 @@ export default function AdminHome() {
     setWeekModalMode('create');
     setWeekModalReservationId(null);
     setWeekModalRecurringTemplateId(null);
+    setWeekModalEditScope('single');
     setWeekModalStatus(null);
     setWeekModalEmail('@udea.edu.co');
     setWeekModalName('');
@@ -1056,6 +1073,7 @@ export default function AdminHome() {
     setWeekModalMode('edit');
     setWeekModalReservationId(r.id);
     setWeekModalRecurringTemplateId(r.recurring_template_id || null);
+    setWeekModalEditScope('single');
     setWeekModalStatus(r.status);
     setWeekModalEmail(r.app_users?.email || '');
     setWeekModalName(r.app_users?.name || '');
@@ -1090,25 +1108,69 @@ export default function AdminHome() {
     setWeekModalSubmitting(true);
     try {
       if (weekModalMode === 'edit') {
-        const { error: updateError } = await supabase
-          .from('reservations')
-          .update({
-            room_id: weekModalRoomId,
-            date: weekModalDate,
-            start_time: weekModalStart,
-            end_time: weekModalEnd,
-            clase: weekModalClase.trim() || null,
-          })
-          .eq('id', weekModalReservationId);
+        const editingSeries = weekModalRecurringTemplateId && weekModalEditScope === 'series';
 
-        if (updateError) {
-          if (updateError.code === '23P01') {
-            setWeekModalError('Ese espacio ya está ocupado en ese horario. Elige otra fecha/hora.');
-          } else {
-            setWeekModalError(`No se pudo actualizar la reserva: ${updateError.message}`);
+        if (editingSeries) {
+          const { error: templateError } = await supabase
+            .from('recurring_templates')
+            .update({
+              room_id: weekModalRoomId,
+              start_time: weekModalStart,
+              end_time: weekModalEnd,
+              materia: weekModalClase.trim() || null,
+            })
+            .eq('id', weekModalRecurringTemplateId);
+
+          if (templateError) {
+            setWeekModalError(`No se pudo actualizar la clase recurrente: ${templateError.message}`);
+            setWeekModalSubmitting(false);
+            return;
           }
-          setWeekModalSubmitting(false);
-          return;
+
+          const { error: bulkError } = await supabase
+            .from('reservations')
+            .update({
+              room_id: weekModalRoomId,
+              start_time: weekModalStart,
+              end_time: weekModalEnd,
+              clase: weekModalClase.trim() || null,
+            })
+            .eq('recurring_template_id', weekModalRecurringTemplateId)
+            .neq('status', 'cancelada')
+            .neq('status', 'rechazada');
+
+          if (bulkError) {
+            if (bulkError.code === '23P01') {
+              setWeekModalError(
+                'No se pudo mover toda la serie porque al menos una fecha choca con otra reserva existente en ese nuevo horario/espacio. Revisa esa fecha manualmente o edita solo esa reserva puntual.'
+              );
+            } else {
+              setWeekModalError(`No se pudo actualizar la serie: ${bulkError.message}`);
+            }
+            setWeekModalSubmitting(false);
+            return;
+          }
+        } else {
+          const { error: updateError } = await supabase
+            .from('reservations')
+            .update({
+              room_id: weekModalRoomId,
+              date: weekModalDate,
+              start_time: weekModalStart,
+              end_time: weekModalEnd,
+              clase: weekModalClase.trim() || null,
+            })
+            .eq('id', weekModalReservationId);
+
+          if (updateError) {
+            if (updateError.code === '23P01') {
+              setWeekModalError('Ese espacio ya está ocupado en ese horario. Elige otra fecha/hora.');
+            } else {
+              setWeekModalError(`No se pudo actualizar la reserva: ${updateError.message}`);
+            }
+            setWeekModalSubmitting(false);
+            return;
+          }
         }
       } else {
         const email = weekModalEmail.trim().toLowerCase();
@@ -1238,6 +1300,33 @@ export default function AdminHome() {
     await loadWeekReservations();
   }
 
+  const loadRoomBlocks = useCallback(async (roomId) => {
+    if (!roomId) {
+      setExistingBlocks([]);
+      return;
+    }
+    setExistingBlocksLoading(true);
+    const { data, error } = await supabase
+      .from('room_blocks')
+      .select('id, date, reason')
+      .eq('room_id', roomId)
+      .gte('date', todayStr())
+      .order('date', { ascending: true });
+
+    if (error) {
+      console.error('[admin] error cargando bloqueos:', error);
+      setExistingBlocks([]);
+    } else {
+      setExistingBlocks(data || []);
+    }
+    setExistingBlocksLoading(false);
+  }, []);
+
+  useEffect(() => {
+    setSelectedBlockIds([]);
+    loadRoomBlocks(blockRoomId);
+  }, [blockRoomId, loadRoomBlocks]);
+
   async function handleBlockRoom(e) {
     e.preventDefault();
     setBlockError(null);
@@ -1263,35 +1352,28 @@ export default function AdminHome() {
         guard += 1;
       }
 
-      const startTime = `${pad2(OPERATING_START)}:00`;
-      const endTime = `${pad2(OPERATING_END)}:00`;
-      const noteText = `Bloqueado por administrador${blockReason.trim() ? `: ${blockReason.trim()}` : ''}`;
+      const rows = dates.map((d) => ({
+        room_id: blockRoomId,
+        date: d,
+        reason: blockReason.trim() || null,
+        created_by: session.user.id,
+      }));
 
-      let blocked = 0;
-      const skippedDates = [];
+      const { data: inserted, error } = await supabase
+        .from('room_blocks')
+        .upsert(rows, { onConflict: 'room_id,date', ignoreDuplicates: true })
+        .select('id');
 
-      for (const d of dates) {
-        const { error } = await supabase.from('reservations').insert({
-          room_id: blockRoomId,
-          user_id: session.user.id,
-          date: d,
-          start_time: startTime,
-          end_time: endTime,
-          status: 'confirmada',
-          requires_approval: false,
-          forced: true,
-          notes: noteText,
-        });
-        if (error) {
-          skippedDates.push(d);
-        } else {
-          blocked += 1;
-        }
+      if (error) {
+        setBlockError(`No se pudo bloquear el espacio: ${error.message}`);
+        setBlockSubmitting(false);
+        return;
       }
 
-      setBlockResults({ blocked, skippedDates, total: dates.length });
+      const blocked = (inserted || []).length;
+      setBlockResults({ blocked, skippedDates: [], total: dates.length });
       setBlockReason('');
-      await loadReservations();
+      await loadRoomBlocks(blockRoomId);
     } catch (err) {
       console.error('[admin] error inesperado bloqueando espacio:', err);
       setBlockError('Ocurrió un error inesperado. Intenta de nuevo.');
@@ -1299,6 +1381,23 @@ export default function AdminHome() {
       setBlockSubmitting(false);
     }
   }
+
+  async function handleCancelBlocks() {
+    if (selectedBlockIds.length === 0) return;
+    setCancelBlockSubmitting(true);
+    setCancelBlockError(null);
+
+    const { error } = await supabase.from('room_blocks').delete().in('id', selectedBlockIds);
+
+    if (error) {
+      setCancelBlockError(`No se pudo cancelar el bloqueo: ${error.message}`);
+    } else {
+      setSelectedBlockIds([]);
+      await loadRoomBlocks(blockRoomId);
+    }
+    setCancelBlockSubmitting(false);
+  }
+
 
   async function handleLogout() {
     await supabase.auth.signOut();
@@ -1927,13 +2026,9 @@ export default function AdminHome() {
     const canFinish = r.status === 'confirmada' && !r.returned_at;
     const canCancel = r.status !== 'cancelada';
     const canApproveReject = r.status === 'pendiente';
+    const canMarkNoShow = r.status === 'confirmada' && !r.checked_in_at;
 
-    const startDt = new Date(`${r.date}T${r.start_time}-05:00`);
-    const minutesSinceStart = (now - startDt) / 60000;
-    const isNoShow =
-      !r.checked_in_at &&
-      minutesSinceStart > 30 &&
-      (r.status === 'confirmada' || (r.status === 'cancelada' && r.cancel_reason === 'no_asistio'));
+    const isNoShow = r.status === 'cancelada' && r.cancel_reason === 'no_asistio';
 
     const colors = isNoShow ? { bg: '#F7E8E5', fg: '#A23E33' } : STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
     const statusLabel = isNoShow ? 'No asistida' : STATUS_LABEL[r.status] || r.status;
@@ -1980,6 +2075,11 @@ export default function AdminHome() {
             {canCheckIn && (
               <button onClick={() => handleCheckIn(r.id)} disabled={actionId === r.id} style={btnStyle('#16241C', '#16241C')}>
                 Asistió
+              </button>
+            )}
+            {canMarkNoShow && (
+              <button onClick={() => handleMarkNoShow(r.id)} disabled={actionId === r.id} style={btnStyle('#A23E33', '#A23E33')}>
+                No asistió
               </button>
             )}
             {canFinish && (
@@ -2596,7 +2696,7 @@ export default function AdminHome() {
           <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 18, marginBottom: 26 }}>
             <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 6px' }}>Bloquear espacio</h2>
             <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 14px' }}>
-              Ocupa el espacio de 6:00 a.m. a 8:00 p.m. en cada día del rango, para que nadie pueda reservarlo (ej. mantenimiento). Si algún día ya tiene algo reservado, ese día se omite y se reporta.
+              Marca el espacio como bloqueado en cada día del rango, para que nadie pueda reservarlo (ej. mantenimiento). Esto no crea ninguna reserva — es un bloqueo aparte, que puedes cancelar cuando quieras.
             </p>
 
             <form onSubmit={handleBlockRoom}>
@@ -2665,8 +2765,8 @@ export default function AdminHome() {
               {blockResults && (
                 <div style={{ background: '#E4F0EA', border: '1px solid #bcd9c9', color: '#084F39', padding: 10, borderRadius: 6, marginBottom: 12, fontSize: 12 }}>
                   {blockResults.blocked} de {blockResults.total} día(s) bloqueado(s) correctamente.
-                  {blockResults.skippedDates.length > 0 && (
-                    <> Días que ya tenían algo y no se pudieron bloquear: {blockResults.skippedDates.join(', ')}.</>
+                  {blockResults.blocked < blockResults.total && (
+                    <> Los demás ya estaban bloqueados de antes.</>
                   )}
                 </div>
               )}
@@ -2682,6 +2782,65 @@ export default function AdminHome() {
                 {blockSubmitting ? 'Bloqueando...' : 'Bloquear espacio'}
               </button>
             </form>
+
+            {blockRoomId && (
+              <div style={{ marginTop: 20, paddingTop: 16, borderTop: '1px solid #DBDCCF' }}>
+                <h3 style={{ fontSize: 13, fontWeight: 600, margin: '0 0 10px' }}>Bloqueos activos de este espacio (desde hoy)</h3>
+
+                {existingBlocksLoading && <p style={{ fontSize: 12, color: '#5B6B60' }}>Cargando…</p>}
+
+                {!existingBlocksLoading && existingBlocks.length === 0 && (
+                  <p style={{ fontSize: 12, color: '#5B6B60' }}>Este espacio no tiene ningún bloqueo activo.</p>
+                )}
+
+                {!existingBlocksLoading && existingBlocks.length > 0 && (
+                  <>
+                    <div style={{ maxHeight: 180, overflowY: 'auto', border: '1px solid #DBDCCF', borderRadius: 6, marginBottom: 10 }}>
+                      {existingBlocks.map((b) => (
+                        <label
+                          key={b.id}
+                          style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 12.5, borderBottom: '1px solid #EEEDE4', cursor: 'pointer' }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={selectedBlockIds.includes(b.id)}
+                            onChange={(e) =>
+                              setSelectedBlockIds((prev) =>
+                                e.target.checked ? [...prev, b.id] : prev.filter((id) => id !== b.id)
+                              )
+                            }
+                          />
+                          <span>{b.date}</span>
+                          {b.reason && <span style={{ color: '#5B6B60' }}>— {b.reason}</span>}
+                        </label>
+                      ))}
+                    </div>
+
+                    {cancelBlockError && (
+                      <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 8, borderRadius: 6, marginBottom: 10, fontSize: 12 }}>
+                        {cancelBlockError}
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleCancelBlocks}
+                      disabled={selectedBlockIds.length === 0 || cancelBlockSubmitting}
+                      style={{
+                        padding: '7px 14px', fontSize: 12.5, fontWeight: 600, borderRadius: 6, border: '1px solid #0B6E4F',
+                        color: '#0B6E4F', background: 'transparent',
+                        cursor: selectedBlockIds.length === 0 || cancelBlockSubmitting ? 'not-allowed' : 'pointer',
+                        opacity: selectedBlockIds.length === 0 || cancelBlockSubmitting ? 0.6 : 1,
+                      }}
+                    >
+                      {cancelBlockSubmitting
+                        ? 'Cancelando...'
+                        : `Cancelar bloqueo (${selectedBlockIds.length} seleccionado${selectedBlockIds.length === 1 ? '' : 's'})`}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </>
       )}
@@ -3756,16 +3915,62 @@ export default function AdminHome() {
                     )}
                   </div>
 
+                  {weekModalMode === 'edit' && weekModalRecurringTemplateId && (
+                    <div style={{ marginBottom: 12 }}>
+                      <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>¿Qué quieres editar?</label>
+                      <div style={{ display: 'flex', gap: 8 }}>
+                        <button
+                          type="button"
+                          onClick={() => setWeekModalEditScope('single')}
+                          style={{
+                            flex: 1, padding: '8px 10px', fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: 'pointer',
+                            border: weekModalEditScope === 'single' ? '1px solid #0B6E4F' : '1px solid #DBDCCF',
+                            background: weekModalEditScope === 'single' ? '#0B6E4F' : '#fff',
+                            color: weekModalEditScope === 'single' ? '#fff' : '#1E2A22',
+                          }}
+                        >
+                          Editar solo esta fecha
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setWeekModalEditScope('series')}
+                          style={{
+                            flex: 1, padding: '8px 10px', fontSize: 12, fontWeight: 600, borderRadius: 6, cursor: 'pointer',
+                            border: weekModalEditScope === 'series' ? '1px solid #0B6E4F' : '1px solid #DBDCCF',
+                            background: weekModalEditScope === 'series' ? '#0B6E4F' : '#fff',
+                            color: weekModalEditScope === 'series' ? '#fff' : '#1E2A22',
+                          }}
+                        >
+                          Editar toda la serie
+                        </button>
+                      </div>
+                      {weekModalEditScope === 'series' && (
+                        <p style={{ fontSize: 11, color: '#5B6B60', margin: '6px 0 0' }}>
+                          El espacio, horario y clase se van a actualizar en TODAS las fechas activas de esta clase recurrente. Los días de la semana y el rango de fechas no cambian.
+                        </p>
+                      )}
+                    </div>
+                  )}
+
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 12 }}>
                     <div>
                       <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Fecha</label>
-                      <input
-                        type="date"
-                        value={weekModalDate}
-                        onChange={(e) => setWeekModalDate(e.target.value)}
-                        required
-                        style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
-                      />
+                      {weekModalEditScope === 'series' ? (
+                        <input
+                          type="text"
+                          value="Todas las fechas"
+                          disabled
+                          style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box', background: '#F5F4EC', color: '#5B6B60' }}
+                        />
+                      ) : (
+                        <input
+                          type="date"
+                          value={weekModalDate}
+                          onChange={(e) => setWeekModalDate(e.target.value)}
+                          required
+                          style={{ width: '100%', padding: 9, fontSize: 13, borderRadius: 6, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+                        />
+                      )}
                     </div>
                     <div>
                       <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Hora inicio</label>
@@ -3871,7 +4076,13 @@ export default function AdminHome() {
                           background: '#0B6E4F', color: '#fff', cursor: weekModalSubmitting ? 'not-allowed' : 'pointer', opacity: weekModalSubmitting ? 0.7 : 1,
                         }}
                       >
-                        {weekModalSubmitting ? 'Guardando...' : weekModalMode === 'create' ? 'Crear reserva' : 'Guardar cambios'}
+                        {weekModalSubmitting
+                          ? 'Guardando...'
+                          : weekModalMode === 'create'
+                          ? 'Crear reserva'
+                          : weekModalRecurringTemplateId && weekModalEditScope === 'series'
+                          ? 'Guardar toda la serie'
+                          : 'Guardar solo esta fecha'}
                       </button>
                     </div>
                   </div>
