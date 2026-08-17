@@ -94,6 +94,7 @@ export default function Reservar() {
   // Paso 2 y 3
   const [type, setType] = useState(null);
   const [rooms, setRooms] = useState([]);
+  const [quickAvailability, setQuickAvailability] = useState([]);
   const [roomId, setRoomId] = useState(null);
   const [date, setDate] = useState(todayStr());
   const [duration, setDuration] = useState(60);
@@ -151,6 +152,13 @@ export default function Reservar() {
   }
 
   // ---------- PASO 2: elegir tipo ----------
+  function pickQuickRoom(room, time) {
+    setRoomId(room.id);
+    setDate(nowBogota().dateStr);
+    setDuration(60);
+    setStart(time);
+  }
+
   async function selectType(t) {
     setType(t);
     setError(null);
@@ -170,6 +178,64 @@ export default function Reservar() {
       }
       setRooms(data || []);
       setRoomId(data && data.length ? data[0].id : null);
+
+      // Calcula, para cada espacio, si está libre ahora mismo o cuál es su
+      // próxima hora disponible hoy (bloques de 1 hora), para mostrar una
+      // lista rápida de "disponibles ahora" apenas eligen el tipo de espacio.
+      const roomIds = (data || []).map((r) => r.id);
+      if (roomIds.length > 0) {
+        const today = nowBogota().dateStr;
+        const { data: busyToday } = await supabase
+          .from('reservations')
+          .select('room_id, start_time, end_time, status')
+          .in('room_id', roomIds)
+          .eq('date', today)
+          .in('status', ['confirmada', 'pendiente', 'sin_verificar']);
+
+        const { data: blockedToday } = await supabase
+          .from('room_blocks')
+          .select('room_id')
+          .in('room_id', roomIds)
+          .eq('date', today);
+
+        const blockedRoomIds = new Set((blockedToday || []).map((b) => b.room_id));
+        const { minutes: nowMin } = nowBogota();
+        const nextSlotMin = Math.ceil(nowMin / 30) * 30;
+        const dayEndMin = OPERATING_END * 60;
+        const QUICK_DURATION = 60;
+
+        const quick = (data || []).map((r) => {
+          if (blockedRoomIds.has(r.id)) {
+            return { room: r, status: 'none' };
+          }
+          const busyForRoom = (busyToday || [])
+            .filter((b) => b.room_id === r.id)
+            .map((b) => ({ start: minsOfDay(b.start_time.slice(0, 5)), end: minsOfDay(b.end_time.slice(0, 5)) }));
+
+          let slot = nextSlotMin;
+          while (slot + QUICK_DURATION <= dayEndMin) {
+            const overlaps = busyForRoom.some((b) => slot < b.end && b.start < slot + QUICK_DURATION);
+            if (!overlaps) {
+              return {
+                room: r,
+                status: slot === nextSlotMin ? 'now' : 'later',
+                time: `${pad(Math.floor(slot / 60))}:${pad(slot % 60)}`,
+              };
+            }
+            slot += 30;
+          }
+          return { room: r, status: 'none' };
+        });
+
+        quick.sort((a, b) => {
+          const order = { now: 0, later: 1, none: 2 };
+          return order[a.status] - order[b.status];
+        });
+        setQuickAvailability(quick);
+      } else {
+        setQuickAvailability([]);
+      }
+
       setStep(3);
     } catch (err) {
       setError(`Error de conexión: ${err.message}`);
@@ -397,6 +463,54 @@ export default function Reservar() {
         {error && (
           <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 12, borderRadius: 8, marginBottom: 14, fontSize: 13 }}>
             {error}
+          </div>
+        )}
+
+        {quickAvailability.length > 0 && (
+          <div style={{ marginBottom: 18 }}>
+            <div style={{ fontSize: 12, color: '#5B6B60', fontWeight: 600, marginBottom: 6 }}>
+              Disponibles ahora mismo (hoy)
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 220, overflowY: 'auto' }}>
+              {quickAvailability.map((q) => {
+                const isSelected = roomId === q.room.id && date === nowBogota().dateStr && start === q.time;
+                if (q.status === 'none') {
+                  return (
+                    <div
+                      key={q.room.id}
+                      style={{
+                        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        padding: '8px 10px', borderRadius: 8, border: '1px solid #EEEDE4', fontSize: 13, color: '#B9B7AC',
+                      }}
+                    >
+                      <span>{q.room.name}</span>
+                      <span style={{ fontSize: 11 }}>Sin disponibilidad hoy</span>
+                    </div>
+                  );
+                }
+                return (
+                  <button
+                    key={q.room.id}
+                    type="button"
+                    onClick={() => pickQuickRoom(q.room, q.time)}
+                    style={{
+                      display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                      padding: '8px 10px', borderRadius: 8, cursor: 'pointer', textAlign: 'left',
+                      border: isSelected ? '1px solid #0B6E4F' : '1px solid #DBDCCF',
+                      background: isSelected ? '#E4F0EA' : '#fff',
+                    }}
+                  >
+                    <span style={{ fontSize: 13, fontWeight: 500 }}>{q.room.name}</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: q.status === 'now' ? '#0B6E4F' : '#6b5510' }}>
+                      {q.status === 'now' ? `Disponible ahora (${q.time})` : `Libre desde las ${q.time}`}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+            <p style={{ fontSize: 11, color: '#5B6B60', margin: '8px 0 0' }}>
+              Toca un espacio para llenar la fecha y hora solas, o elige manualmente abajo.
+            </p>
           </div>
         )}
 
