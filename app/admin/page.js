@@ -65,6 +65,7 @@ const STATUS_LABEL = {
   confirmada: 'Confirmada',
   cancelada: 'Cancelada',
   rechazada: 'Rechazada',
+  no_asistio: 'No asistió',
 };
 
 const STATUS_COLOR = {
@@ -73,6 +74,7 @@ const STATUS_COLOR = {
   confirmada: { bg: '#E4F0EA', fg: '#084F39' },
   cancelada: { bg: '#eee', fg: '#888' },
   rechazada: { bg: '#F7E8E5', fg: '#A23E33' },
+  no_asistio: { bg: '#F7E8E5', fg: '#A23E33' },
 };
 
 const ROOM_TYPE_LABEL = { cubiculo: 'Cubículos', aula: 'Aulas', auditorio: 'Auditorio' };
@@ -353,7 +355,7 @@ export default function AdminHome() {
       .select('id, room_id, date, start_time, end_time, status, clase, checked_in_at, returned_at, auto_cancelled, cancel_reason, rooms ( name, type ), app_users ( name, email )')
       .eq('date', date)
       .neq('status', 'rechazada')
-      .or('status.neq.cancelada,cancel_reason.eq.no_asistio')
+      .neq('status', 'cancelada')
       .order('start_time', { ascending: true });
 
     if (error) {
@@ -538,7 +540,7 @@ export default function AdminHome() {
       if (r.notes && r.notes.startsWith('Bloqueado por administrador')) continue;
 
       const endDt = new Date(`${r.date}T${r.end_time}-05:00`);
-      const completed = (r.status === 'confirmada' && endDt < now) || (r.status === 'cancelada' && r.cancel_reason === 'no_asistio');
+      const completed = (r.status === 'confirmada' && endDt < now) || r.status === 'no_asistio';
       if (!completed) continue;
 
       const key = r.user_id;
@@ -747,11 +749,11 @@ export default function AdminHome() {
   }
 
   async function handleMarkNoShow(id) {
-    if (!window.confirm('¿Marcar esta reserva como "no asistida"? Esto libera el espacio y queda registrado en las estadísticas.')) return;
+    if (!window.confirm('¿Marcar esta reserva como "no asistida"? El espacio queda libre de inmediato para que otra persona lo pida (o tú se lo asignes), y esta reserva se queda registrada como historial — no se cancela.')) return;
     setActionId(id);
     const { error } = await supabase
       .from('reservations')
-      .update({ status: 'cancelada', cancel_reason: 'no_asistio', auto_cancelled: false })
+      .update({ status: 'no_asistio', cancel_reason: 'no_asistio', auto_cancelled: false })
       .eq('id', id);
     if (error) {
       console.error('[admin] error marcando no asistida:', error);
@@ -954,7 +956,8 @@ export default function AdminHome() {
           .eq('end_time', manualEnd)
           .in('date', occurrences)
           .neq('status', 'cancelada')
-          .neq('status', 'rechazada');
+          .neq('status', 'rechazada')
+          .neq('status', 'no_asistio');
 
         if (conflictError) {
           setManualFormError(`No se pudo verificar la disponibilidad: ${conflictError.message}`);
@@ -1998,7 +2001,7 @@ export default function AdminHome() {
   const completedConfirmed = statsReservations.filter(
     (r) =>
       (r.status === 'confirmada' && new Date(`${r.date}T${r.end_time}-05:00`) < statsNow) ||
-      (r.status === 'cancelada' && r.cancel_reason === 'no_asistio')
+      r.status === 'no_asistio'
   );
   const noShows = completedConfirmed.filter((r) => !r.checked_in_at);
   const noShowRate = completedConfirmed.length > 0 ? Math.round((noShows.length / completedConfirmed.length) * 100) : null;
@@ -2024,14 +2027,12 @@ export default function AdminHome() {
   function renderReservationRow(r) {
     const canCheckIn = r.status === 'confirmada' && !r.checked_in_at;
     const canFinish = r.status === 'confirmada' && !r.returned_at;
-    const canCancel = r.status !== 'cancelada';
+    const canCancel = r.status !== 'cancelada' && r.status !== 'no_asistio';
     const canApproveReject = r.status === 'pendiente';
     const canMarkNoShow = r.status === 'confirmada' && !r.checked_in_at;
 
-    const isNoShow = r.status === 'cancelada' && r.cancel_reason === 'no_asistio';
-
-    const colors = isNoShow ? { bg: '#F7E8E5', fg: '#A23E33' } : STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
-    const statusLabel = isNoShow ? 'No asistida' : STATUS_LABEL[r.status] || r.status;
+    const colors = STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
+    const statusLabel = STATUS_LABEL[r.status] || r.status;
     const btnStyle = (border, color, filled) => ({
       padding: '3px 7px', fontSize: 11, border: `1px solid ${border}`, color: filled ? '#fff' : color,
       background: filled ? border : 'transparent', borderRadius: 5, cursor: 'pointer',
