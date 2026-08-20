@@ -4,8 +4,19 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { supabase } from '../../lib/supabaseClient';
 
+function pad(n) {
+  return String(n).padStart(2, '0');
+}
+
+// Colombia siempre está en UTC-5 (no tiene horario de verano), así que
+// podemos calcular la fecha/hora de Bogotá restando 5 horas al UTC actual.
+// OJO: antes esta función usaba new Date().toISOString(), que es hora UTC —
+// eso hacía que el panel "cambiara de día" a las 7pm hora Colombia (medianoche
+// UTC) en vez de a medianoche real.
 function todayStr() {
-  return new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const shifted = new Date(now.getTime() - 5 * 60 * 60 * 1000);
+  return `${shifted.getUTCFullYear()}-${pad(shifted.getUTCMonth() + 1)}-${pad(shifted.getUTCDate())}`;
 }
 
 const WEEKDAY_LABEL = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
@@ -758,6 +769,26 @@ export default function AdminHome() {
     if (error) {
       console.error('[admin] error marcando no asistida:', error);
       setListError(`No se pudo marcar como no asistida: ${error.message}`);
+    } else {
+      await loadReservations();
+    }
+    setActionId(null);
+  }
+
+  async function handleUndoStatus(id) {
+    if (!window.confirm('¿Deshacer esto y volver a dejar la reserva como "Confirmada"?')) return;
+    setActionId(id);
+    const { error } = await supabase
+      .from('reservations')
+      .update({ status: 'confirmada', cancel_reason: null, auto_cancelled: false })
+      .eq('id', id);
+    if (error) {
+      if (error.code === '23P01') {
+        setListError('No se pudo deshacer: mientras tanto, alguien más reservó ese mismo espacio y horario. Cancela o mueve esa otra reserva primero si quieres recuperar esta.');
+      } else {
+        console.error('[admin] error deshaciendo estado:', error);
+        setListError(`No se pudo deshacer: ${error.message}`);
+      }
     } else {
       await loadReservations();
     }
@@ -2030,6 +2061,7 @@ export default function AdminHome() {
     const canCancel = r.status !== 'cancelada' && r.status !== 'no_asistio';
     const canApproveReject = r.status === 'pendiente';
     const canMarkNoShow = r.status === 'confirmada' && !r.checked_in_at;
+    const canUndo = r.status === 'cancelada' || r.status === 'no_asistio';
 
     const colors = STATUS_COLOR[r.status] || { bg: '#eee', fg: '#333' };
     const statusLabel = STATUS_LABEL[r.status] || r.status;
@@ -2091,6 +2123,11 @@ export default function AdminHome() {
             {canCancel && (
               <button onClick={() => handleCancel(r.id)} disabled={actionId === r.id} style={btnStyle('#A23E33', '#A23E33')}>
                 Cancelar
+              </button>
+            )}
+            {canUndo && (
+              <button onClick={() => handleUndoStatus(r.id)} disabled={actionId === r.id} style={btnStyle('#0B6E4F', '#0B6E4F')}>
+                Deshacer
               </button>
             )}
           </div>
