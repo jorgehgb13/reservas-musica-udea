@@ -531,6 +531,8 @@ export default function AdminHome() {
   const [userHistory, setUserHistory] = useState([]);
   const [userHistoryLoading, setUserHistoryLoading] = useState(false);
   const [userHistoryError, setUserHistoryError] = useState(null);
+  const [userViewMode, setUserViewMode] = useState('semana'); // 'semana' | 'historial'
+  const [userWeekAnchorDate, setUserWeekAnchorDate] = useState(todayStr());
 
   useEffect(() => {
     const q = userSearchQuery.trim();
@@ -557,10 +559,69 @@ export default function AdminHome() {
     };
   }, [userSearchQuery, selectedUser]);
 
-  async function selectSearchedUser(u) {
-    setSelectedUser(u);
-    setUserSearchQuery(u.name || u.email);
-    setUserSearchResults([]);
+  function combineHistory(resData, loanData) {
+    return [
+      ...(resData || []).map((r) => ({
+        id: `r-${r.id}`,
+        kind: 'espacio',
+        date: r.date,
+        start_time: r.start_time,
+        end_time: r.end_time,
+        status: r.status,
+        detail: r.rooms?.name || '—',
+        clase: r.clase,
+        isRecurring: !!r.recurring_template_id,
+      })),
+      ...(loanData || []).map((l) => ({
+        id: `i-${l.id}`,
+        kind: 'instrumento',
+        date: l.date,
+        start_time: l.start_time,
+        end_time: l.end_time,
+        status: l.status,
+        detail: l.instruments ? `${l.instruments.name} — Inv. ${l.instruments.inventory_number}` : '—',
+        clase: null,
+        isRecurring: false,
+      })),
+    ].sort((a, b) => (a.date + a.start_time < b.date + b.start_time ? 1 : -1));
+  }
+
+  const loadUserWeek = useCallback(async (userId, anchorDate) => {
+    setUserHistoryLoading(true);
+    setUserHistoryError(null);
+    const weekDates = getWeekRange(anchorDate);
+
+    const [resRes, loanRes] = await Promise.all([
+      supabase
+        .from('reservations')
+        .select('id, date, start_time, end_time, status, clase, recurring_template_id, rooms ( name, type )')
+        .eq('user_id', userId)
+        .gte('date', weekDates[0])
+        .lte('date', weekDates[6])
+        .order('date', { ascending: false })
+        .order('start_time', { ascending: false }),
+      supabase
+        .from('instrument_reservations')
+        .select('id, date, start_time, end_time, status, instruments ( name, inventory_number )')
+        .eq('user_id', userId)
+        .gte('date', weekDates[0])
+        .lte('date', weekDates[6])
+        .order('date', { ascending: false })
+        .order('start_time', { ascending: false }),
+    ]);
+
+    if (resRes.error || loanRes.error) {
+      setUserHistoryError('No se pudo cargar la semana de esta persona.');
+      setUserHistory([]);
+      setUserHistoryLoading(false);
+      return;
+    }
+
+    setUserHistory(combineHistory(resRes.data, loanRes.data));
+    setUserHistoryLoading(false);
+  }, []);
+
+  const loadUserHistoryAll = useCallback(async (userId) => {
     setUserHistoryLoading(true);
     setUserHistoryError(null);
 
@@ -568,14 +629,14 @@ export default function AdminHome() {
       supabase
         .from('reservations')
         .select('id, date, start_time, end_time, status, clase, recurring_template_id, rooms ( name, type )')
-        .eq('user_id', u.id)
+        .eq('user_id', userId)
         .order('date', { ascending: false })
         .order('start_time', { ascending: false })
         .limit(200),
       supabase
         .from('instrument_reservations')
         .select('id, date, start_time, end_time, status, instruments ( name, inventory_number )')
-        .eq('user_id', u.id)
+        .eq('user_id', userId)
         .order('date', { ascending: false })
         .order('start_time', { ascending: false })
         .limit(200),
@@ -588,33 +649,18 @@ export default function AdminHome() {
       return;
     }
 
-    const combined = [
-      ...(resRes.data || []).map((r) => ({
-        id: `r-${r.id}`,
-        kind: 'espacio',
-        date: r.date,
-        start_time: r.start_time,
-        end_time: r.end_time,
-        status: r.status,
-        detail: r.rooms?.name || '—',
-        clase: r.clase,
-        isRecurring: !!r.recurring_template_id,
-      })),
-      ...(loanRes.data || []).map((l) => ({
-        id: `i-${l.id}`,
-        kind: 'instrumento',
-        date: l.date,
-        start_time: l.start_time,
-        end_time: l.end_time,
-        status: l.status,
-        detail: l.instruments ? `${l.instruments.name} — Inv. ${l.instruments.inventory_number}` : '—',
-        clase: null,
-        isRecurring: false,
-      })),
-    ].sort((a, b) => (a.date + a.start_time < b.date + b.start_time ? 1 : -1));
-
-    setUserHistory(combined);
+    setUserHistory(combineHistory(resRes.data, loanRes.data));
     setUserHistoryLoading(false);
+  }, []);
+
+  async function selectSearchedUser(u) {
+    setSelectedUser(u);
+    setUserSearchQuery(u.name || u.email);
+    setUserSearchResults([]);
+    setUserViewMode('semana');
+    const thisWeek = todayStr();
+    setUserWeekAnchorDate(thisWeek);
+    await loadUserWeek(u.id, thisWeek);
   }
 
   function clearSelectedUser() {
@@ -623,6 +669,22 @@ export default function AdminHome() {
     setUserSearchResults([]);
     setUserHistory([]);
     setUserHistoryError(null);
+    setUserViewMode('semana');
+  }
+
+  useEffect(() => {
+    if (!selectedUser || userViewMode !== 'semana') return;
+    loadUserWeek(selectedUser.id, userWeekAnchorDate);
+  }, [selectedUser, userWeekAnchorDate, userViewMode, loadUserWeek]);
+
+  function switchUserToHistorial() {
+    setUserViewMode('historial');
+    if (selectedUser) loadUserHistoryAll(selectedUser.id);
+  }
+
+  function switchUserToSemana() {
+    setUserViewMode('semana');
+    setUserWeekAnchorDate(todayStr());
   }
 
   const loadAttendance = useCallback(async () => {
@@ -4530,7 +4592,7 @@ export default function AdminHome() {
         <>
           <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 6px' }}>Reservas por usuario</h2>
           <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 16px' }}>
-            Busca por nombre o correo para ver todo el historial de reservas de espacios y préstamos de instrumentos de esa persona.
+            Busca por nombre o correo. Por defecto se ve la semana actual de esa persona (espacios e instrumentos); hay un botón para ver su historial completo.
           </p>
 
           <div style={{ position: 'relative', maxWidth: 420, marginBottom: 20 }}>
@@ -4597,6 +4659,62 @@ export default function AdminHome() {
                 <div style={{ color: '#5B6B60', fontSize: 12.5 }}>{selectedUser.email}</div>
               </div>
 
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={switchUserToSemana}
+                  style={{
+                    padding: '7px 12px', fontSize: 12.5, fontWeight: 600, borderRadius: 8, cursor: 'pointer',
+                    border: userViewMode === 'semana' ? '1px solid #0B6E4F' : '1px solid #DBDCCF',
+                    background: userViewMode === 'semana' ? '#0B6E4F' : '#fff',
+                    color: userViewMode === 'semana' ? '#fff' : '#1E2A22',
+                  }}
+                >
+                  Semana actual
+                </button>
+                <button
+                  type="button"
+                  onClick={switchUserToHistorial}
+                  style={{
+                    padding: '7px 12px', fontSize: 12.5, fontWeight: 600, borderRadius: 8, cursor: 'pointer',
+                    border: userViewMode === 'historial' ? '1px solid #0B6E4F' : '1px solid #DBDCCF',
+                    background: userViewMode === 'historial' ? '#0B6E4F' : '#fff',
+                    color: userViewMode === 'historial' ? '#fff' : '#1E2A22',
+                  }}
+                >
+                  Ver historial completo
+                </button>
+
+                {userViewMode === 'semana' && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginLeft: 8 }}>
+                    <button
+                      onClick={() => setUserWeekAnchorDate((d) => addDays(d, -7))}
+                      style={{ padding: '7px 10px', fontSize: 12.5, borderRadius: 8, border: '1px solid #DBDCCF', background: '#fff', cursor: 'pointer' }}
+                    >
+                      ← Semana anterior
+                    </button>
+                    <input
+                      type="date"
+                      value={userWeekAnchorDate}
+                      onChange={(e) => setUserWeekAnchorDate(e.target.value)}
+                      style={{ padding: 7, border: '1px solid #DBDCCF', borderRadius: 8, fontSize: 12.5 }}
+                    />
+                    <button
+                      onClick={() => setUserWeekAnchorDate((d) => addDays(d, 7))}
+                      style={{ padding: '7px 10px', fontSize: 12.5, borderRadius: 8, border: '1px solid #DBDCCF', background: '#fff', cursor: 'pointer' }}
+                    >
+                      Semana siguiente →
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {userViewMode === 'semana' && (
+                <p style={{ fontSize: 11.5, color: '#5B6B60', margin: '-8px 0 14px' }}>
+                  Semana del {getWeekRange(userWeekAnchorDate)[0]} al {getWeekRange(userWeekAnchorDate)[6]}
+                </p>
+              )}
+
               {userHistoryError && (
                 <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 14, fontSize: 12 }}>
                   {userHistoryError}
@@ -4621,7 +4739,9 @@ export default function AdminHome() {
                       {userHistory.length === 0 && (
                         <tr>
                           <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
-                            Esta persona no tiene ninguna reserva registrada.
+                            {userViewMode === 'semana'
+                              ? 'Esta persona no tiene reservas en esta semana.'
+                              : 'Esta persona no tiene ninguna reserva registrada.'}
                           </td>
                         </tr>
                       )}
