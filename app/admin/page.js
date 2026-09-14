@@ -523,6 +523,108 @@ export default function AdminHome() {
     if (session && view === 'estadisticas') loadStats();
   }, [session, view, loadStats]);
 
+  // ---------- Pestaña Usuarios: historial de reservas por persona ----------
+  const [userSearchQuery, setUserSearchQuery] = useState('');
+  const [userSearchResults, setUserSearchResults] = useState([]);
+  const [userSearchLoading, setUserSearchLoading] = useState(false);
+  const [selectedUser, setSelectedUser] = useState(null);
+  const [userHistory, setUserHistory] = useState([]);
+  const [userHistoryLoading, setUserHistoryLoading] = useState(false);
+  const [userHistoryError, setUserHistoryError] = useState(null);
+
+  useEffect(() => {
+    const q = userSearchQuery.trim();
+    if (q.length < 2 || (selectedUser && q === selectedUser.name)) {
+      setUserSearchResults([]);
+      return;
+    }
+    let cancelled = false;
+    setUserSearchLoading(true);
+    const timeout = setTimeout(async () => {
+      const { data, error } = await supabase
+        .from('app_users')
+        .select('id, name, email')
+        .or(`name.ilike.%${q}%,email.ilike.%${q}%`)
+        .order('name', { ascending: true })
+        .limit(8);
+      if (cancelled) return;
+      setUserSearchResults(error ? [] : data || []);
+      setUserSearchLoading(false);
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [userSearchQuery, selectedUser]);
+
+  async function selectSearchedUser(u) {
+    setSelectedUser(u);
+    setUserSearchQuery(u.name || u.email);
+    setUserSearchResults([]);
+    setUserHistoryLoading(true);
+    setUserHistoryError(null);
+
+    const [resRes, loanRes] = await Promise.all([
+      supabase
+        .from('reservations')
+        .select('id, date, start_time, end_time, status, clase, recurring_template_id, rooms ( name, type )')
+        .eq('user_id', u.id)
+        .order('date', { ascending: false })
+        .order('start_time', { ascending: false })
+        .limit(200),
+      supabase
+        .from('instrument_reservations')
+        .select('id, date, start_time, end_time, status, instruments ( name, inventory_number )')
+        .eq('user_id', u.id)
+        .order('date', { ascending: false })
+        .order('start_time', { ascending: false })
+        .limit(200),
+    ]);
+
+    if (resRes.error || loanRes.error) {
+      setUserHistoryError('No se pudo cargar el historial de esta persona.');
+      setUserHistory([]);
+      setUserHistoryLoading(false);
+      return;
+    }
+
+    const combined = [
+      ...(resRes.data || []).map((r) => ({
+        id: `r-${r.id}`,
+        kind: 'espacio',
+        date: r.date,
+        start_time: r.start_time,
+        end_time: r.end_time,
+        status: r.status,
+        detail: r.rooms?.name || '—',
+        clase: r.clase,
+        isRecurring: !!r.recurring_template_id,
+      })),
+      ...(loanRes.data || []).map((l) => ({
+        id: `i-${l.id}`,
+        kind: 'instrumento',
+        date: l.date,
+        start_time: l.start_time,
+        end_time: l.end_time,
+        status: l.status,
+        detail: l.instruments ? `${l.instruments.name} — Inv. ${l.instruments.inventory_number}` : '—',
+        clase: null,
+        isRecurring: false,
+      })),
+    ].sort((a, b) => (a.date + a.start_time < b.date + b.start_time ? 1 : -1));
+
+    setUserHistory(combined);
+    setUserHistoryLoading(false);
+  }
+
+  function clearSelectedUser() {
+    setSelectedUser(null);
+    setUserSearchQuery('');
+    setUserSearchResults([]);
+    setUserHistory([]);
+    setUserHistoryError(null);
+  }
+
   const loadAttendance = useCallback(async () => {
     setAttLoading(true);
     setAttError(null);
@@ -2254,6 +2356,16 @@ export default function AdminHome() {
           }}
         >
           Asistencia
+        </button>
+        <button
+          onClick={() => setView('usuarios')}
+          style={{
+            padding: '10px 4px', fontSize: 14, fontWeight: 600, background: 'transparent', cursor: 'pointer',
+            border: 'none', borderBottom: view === 'usuarios' ? '2px solid #0B6E4F' : '2px solid transparent',
+            color: view === 'usuarios' ? '#0B6E4F' : '#5B6B60', marginRight: 20,
+          }}
+        >
+          Usuarios
         </button>
         <a
           href="/admin/carga-masiva"
@@ -4411,6 +4523,136 @@ export default function AdminHome() {
               </div>
             )}
           </div>
+        </>
+      )}
+
+      {view === 'usuarios' && (
+        <>
+          <h2 style={{ fontFamily: 'Georgia, serif', fontSize: 16, margin: '0 0 6px' }}>Reservas por usuario</h2>
+          <p style={{ fontSize: 12, color: '#5B6B60', margin: '0 0 16px' }}>
+            Busca por nombre o correo para ver todo el historial de reservas de espacios y préstamos de instrumentos de esa persona.
+          </p>
+
+          <div style={{ position: 'relative', maxWidth: 420, marginBottom: 20 }}>
+            <input
+              type="text"
+              value={userSearchQuery}
+              onChange={(e) => {
+                setUserSearchQuery(e.target.value);
+                if (selectedUser && e.target.value !== selectedUser.name) setSelectedUser(null);
+              }}
+              placeholder="Escribe un nombre o correo…"
+              style={{ width: '100%', padding: 10, fontSize: 14, borderRadius: 8, border: '1px solid #DBDCCF', boxSizing: 'border-box' }}
+            />
+            {userSearchQuery && (
+              <button
+                type="button"
+                onClick={clearSelectedUser}
+                style={{
+                  position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
+                  background: 'transparent', border: 'none', color: '#5B6B60', fontSize: 16, cursor: 'pointer',
+                }}
+                title="Limpiar"
+              >
+                ×
+              </button>
+            )}
+
+            {userSearchResults.length > 0 && (
+              <div
+                style={{
+                  position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, background: '#fff',
+                  border: '1px solid #DBDCCF', borderRadius: 8, boxShadow: '0 4px 10px rgba(0,0,0,0.08)', zIndex: 20, maxHeight: 240, overflowY: 'auto',
+                }}
+              >
+                {userSearchResults.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => selectSearchedUser(u)}
+                    style={{
+                      display: 'block', width: '100%', textAlign: 'left', padding: '9px 12px', fontSize: 13,
+                      background: 'transparent', border: 'none', borderBottom: '1px solid #EEEDE4', cursor: 'pointer',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600 }}>{u.name || '(sin nombre)'}</div>
+                    <div style={{ color: '#5B6B60', fontSize: 11.5 }}>{u.email}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+            {userSearchLoading && (
+              <div style={{ fontSize: 11.5, color: '#5B6B60', marginTop: 4 }}>Buscando…</div>
+            )}
+          </div>
+
+          {!selectedUser && (
+            <p style={{ fontSize: 13, color: '#5B6B60' }}>Escribe arriba y elige una persona para ver su historial.</p>
+          )}
+
+          {selectedUser && (
+            <>
+              <div style={{ background: '#F5F4EC', border: '1px solid #DBDCCF', borderRadius: 8, padding: 14, marginBottom: 16 }}>
+                <div style={{ fontWeight: 600, fontSize: 14 }}>{selectedUser.name || '(sin nombre)'}</div>
+                <div style={{ color: '#5B6B60', fontSize: 12.5 }}>{selectedUser.email}</div>
+              </div>
+
+              {userHistoryError && (
+                <div style={{ background: '#F7E8E5', border: '1px solid #e6bdb6', color: '#A23E33', padding: 10, borderRadius: 6, marginBottom: 14, fontSize: 12 }}>
+                  {userHistoryError}
+                </div>
+              )}
+
+              {userHistoryLoading && <p style={{ fontSize: 13, color: '#5B6B60' }}>Cargando historial…</p>}
+
+              {!userHistoryLoading && !userHistoryError && (
+                <div style={{ overflowX: 'auto' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ textAlign: 'left', borderBottom: '1px solid #DBDCCF' }}>
+                        <th style={{ padding: 8 }}>Fecha</th>
+                        <th style={{ padding: 8 }}>Horario</th>
+                        <th style={{ padding: 8 }}>Tipo</th>
+                        <th style={{ padding: 8 }}>Detalle</th>
+                        <th style={{ padding: 8 }}>Estado</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {userHistory.length === 0 && (
+                        <tr>
+                          <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
+                            Esta persona no tiene ninguna reserva registrada.
+                          </td>
+                        </tr>
+                      )}
+                      {userHistory.map((h) => {
+                        const colors = STATUS_COLOR[h.status] || { bg: '#eee', fg: '#333' };
+                        return (
+                          <tr key={h.id} style={{ borderBottom: '1px solid #DBDCCF' }}>
+                            <td style={{ padding: 8 }}>{h.date}</td>
+                            <td style={{ padding: 8, fontFamily: 'monospace' }}>
+                              {h.start_time?.slice(0, 5)}-{h.end_time?.slice(0, 5)}
+                            </td>
+                            <td style={{ padding: 8 }}>{h.kind === 'espacio' ? 'Espacio' : 'Instrumento'}</td>
+                            <td style={{ padding: 8 }}>
+                              {h.detail}
+                              {h.clase && <div style={{ fontSize: 11, color: '#5B6B60', fontStyle: 'italic' }}>{h.clase}</div>}
+                              {h.isRecurring && <div style={{ fontSize: 10, color: '#5B6B60' }}>↻ recurrente</div>}
+                            </td>
+                            <td style={{ padding: 8 }}>
+                              <span style={{ background: colors.bg, color: colors.fg, fontSize: 11, fontWeight: 700, padding: '3px 9px', borderRadius: 20 }}>
+                                {STATUS_LABEL[h.status] || h.status}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
         </>
       )}
     </main>

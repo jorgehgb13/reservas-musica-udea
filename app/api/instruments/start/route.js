@@ -72,7 +72,7 @@ export async function POST(request) {
         .from('instrument_reservations')
         .select('date, end_time, status, instruments ( name )')
         .eq('user_id', userId)
-        .in('status', ['confirmada', 'sin_verificar']);
+        .in('status', ['confirmada', 'pendiente', 'sin_verificar']);
 
       if (loanError) {
         console.error('[instruments/start] error revisando préstamos activos:', loanError);

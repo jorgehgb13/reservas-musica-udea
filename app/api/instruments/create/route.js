@@ -63,7 +63,7 @@ export async function POST(request) {
       .from('instrument_reservations')
       .select('date, end_time')
       .eq('user_id', userId)
-      .in('status', ['confirmada', 'sin_verificar']);
+      .in('status', ['confirmada', 'pendiente', 'sin_verificar']);
 
     if (activeError) {
       console.error('[instruments/create] error préstamo activo:', activeError);
@@ -84,7 +84,7 @@ export async function POST(request) {
       .select('start_time, end_time')
       .eq('instrument_id', instrumentId)
       .eq('date', date)
-      .in('status', ['confirmada', 'sin_verificar']);
+      .in('status', ['confirmada', 'pendiente', 'sin_verificar']);
 
     if (conflictError) {
       console.error('[instruments/create] error conflictos:', conflictError);
