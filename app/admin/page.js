@@ -598,6 +598,8 @@ export default function AdminHome() {
         .eq('user_id', userId)
         .gte('date', weekDates[0])
         .lte('date', weekDates[6])
+        .neq('status', 'cancelada')
+        .neq('status', 'rechazada')
         .order('date', { ascending: false })
         .order('start_time', { ascending: false }),
       supabase
@@ -606,6 +608,8 @@ export default function AdminHome() {
         .eq('user_id', userId)
         .gte('date', weekDates[0])
         .lte('date', weekDates[6])
+        .neq('status', 'cancelada')
+        .neq('status', 'rechazada')
         .order('date', { ascending: false })
         .order('start_time', { ascending: false }),
     ]);
@@ -4721,9 +4725,63 @@ export default function AdminHome() {
                 </div>
               )}
 
-              {userHistoryLoading && <p style={{ fontSize: 13, color: '#5B6B60' }}>Cargando historial…</p>}
+              {userHistoryLoading && <p style={{ fontSize: 13, color: '#5B6B60' }}>Cargando…</p>}
 
-              {!userHistoryLoading && !userHistoryError && (
+              {!userHistoryLoading && !userHistoryError && userViewMode === 'semana' && (
+                <div style={{ overflowX: 'auto' }}>
+                  <div style={{ display: 'flex', gap: 8, minWidth: 900 }}>
+                    {getWeekRange(userWeekAnchorDate).map((dayDate) => {
+                      const dayItems = userHistory.filter((h) => h.date === dayDate);
+                      const isToday = dayDate === todayStr();
+                      const weekdayIndex = getWeekRange(userWeekAnchorDate).indexOf(dayDate);
+                      return (
+                        <div
+                          key={dayDate}
+                          style={{
+                            flex: 1, minWidth: 120, border: '1px solid #DBDCCF', borderRadius: 8,
+                            background: isToday ? '#FBFAF3' : '#fff', padding: 8,
+                          }}
+                        >
+                          <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 2 }}>{WEEKDAY_LABEL[weekdayIndex]}</div>
+                          <div style={{ fontSize: 11, color: '#5B6B60', marginBottom: 8 }}>{formatDayShort(dayDate)}</div>
+
+                          {dayItems.length === 0 && (
+                            <div style={{ fontSize: 11, color: '#5B6B60' }}>Sin reservas</div>
+                          )}
+
+                          {dayItems.map((h) => {
+                            const colors = STATUS_COLOR[h.status] || { bg: '#eee', fg: '#333' };
+                            return (
+                              <div
+                                key={h.id}
+                                style={{
+                                  background: colors.bg, color: colors.fg, borderRadius: 6, padding: '4px 6px',
+                                  marginBottom: 6, fontSize: 11,
+                                }}
+                              >
+                                <div style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                                  {h.start_time?.slice(0, 5)}-{h.end_time?.slice(0, 5)}
+                                </div>
+                                <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {h.kind === 'espacio' ? '🏠' : '🎵'} {h.detail}
+                                </div>
+                                {h.clase && (
+                                  <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontStyle: 'italic' }}>
+                                    {h.clase}
+                                  </div>
+                                )}
+                                <div style={{ fontSize: 10, marginTop: 2, opacity: 0.85 }}>{STATUS_LABEL[h.status] || h.status}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {!userHistoryLoading && !userHistoryError && userViewMode === 'historial' && (
                 <div style={{ overflowX: 'auto' }}>
                   <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                     <thead>
@@ -4739,9 +4797,7 @@ export default function AdminHome() {
                       {userHistory.length === 0 && (
                         <tr>
                           <td colSpan={5} style={{ padding: 20, textAlign: 'center', color: '#5B6B60' }}>
-                            {userViewMode === 'semana'
-                              ? 'Esta persona no tiene reservas en esta semana.'
-                              : 'Esta persona no tiene ninguna reserva registrada.'}
+                            Esta persona no tiene ninguna reserva registrada.
                           </td>
                         </tr>
                       )}
