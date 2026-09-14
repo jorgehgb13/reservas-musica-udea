@@ -4731,7 +4731,10 @@ export default function AdminHome() {
                 <div style={{ overflowX: 'auto' }}>
                   <div style={{ display: 'flex', gap: 8, minWidth: 900 }}>
                     {getWeekRange(userWeekAnchorDate).map((dayDate) => {
-                      const dayItems = userHistory.filter((h) => h.date === dayDate);
+                      const dayItems = userHistory
+                        .filter((h) => h.date === dayDate)
+                        .slice()
+                        .sort((a, b) => (a.start_time < b.start_time ? -1 : a.start_time > b.start_time ? 1 : 0));
                       const isToday = dayDate === todayStr();
                       const weekdayIndex = getWeekRange(userWeekAnchorDate).indexOf(dayDate);
                       return (
